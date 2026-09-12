@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#173d34">
+  <title>DocTree · 让项目脉络清晰可见</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="app" aria-busy="true"><div class="boot"><span class="boot-mark">D<span>·</span>T</span><p>正在展开你的项目地图…</p><a class="tree-return-top" href="/tree">← 返回目录树</a></div></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="source-dialog" aria-labelledby="source-title"><div class="dialog-head"><div><span class="eyebrow">SOURCE / 原始依据</span><h2 id="source-title">证据预览</h2></div><button class="icon-button" id="close-dialog" aria-label="关闭证据预览">✕</button></div><div id="source-meta" class="source-meta"></div><div id="source-body" class="source-body"></div></dialog>
+</body>
+</html>

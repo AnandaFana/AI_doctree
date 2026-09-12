@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f6f7f2">
+  <title>DocTree · 目录之间，有迹可循</title>
+  <link rel="stylesheet" href="/tree.css">
+  <script src="/tree.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="DocTree 目录地图">
+      <span class="brand-symbol" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9 7h7v18M16 13h8M16 25h8"/><rect x="3" y="3" width="9" height="8" rx="2"/><rect x="22" y="9" width="7" height="8" rx="2"/><rect x="22" y="21" width="7" height="8" rx="2"/></svg></span>
+      <span class="brand-name">DocTree<span class="brand-dot">.</span></span>
+    </a>
+    <span class="header-divider"></span>
+    <div class="project-control"><label for="project-select">当前项目</label><select id="project-select" data-testid="project-select" aria-label="选择项目" disabled><option>正在读取项目…</option></select></div>
+    <nav class="header-actions" aria-label="页面导航">
+      <button type="button" id="agent-help" class="quiet-button">Agent 怎么用 <span aria-hidden="true">↗</span></button>
+      <a href="/details" class="quiet-button detail-link">详细视图 <span aria-hidden="true">↗</span></a>
+      <span class="local-pill"><span class="status-dot"></span>本地运行</span>
+    </nav>
+  </header>
+
+  <main class="workspace">
+    <h1 id="map-title" class="visually-hidden">项目文件夹树</h1>
+
+    <section class="map-panel" aria-label="项目目录地图">
+      <div class="map-toolbar">
+        <div class="map-mode"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h5M9 5v10M9 5h6M9 15h6"/><rect x="1" y="7" width="5" height="6" rx="1"/><rect x="14" y="2" width="5" height="6" rx="1"/><rect x="14" y="12" width="5" height="6" rx="1"/></svg><strong>目录树</strong><span class="toolbar-separator"></span><span id="tree-stats">读取中</span></div>
+        <div class="tree-scope" role="group" aria-label="目录展示范围"><button type="button" id="scope-managed" data-testid="scope-managed" aria-pressed="false">已接入分支</button><button type="button" id="scope-all" data-testid="scope-all" aria-pressed="true">全部目录</button></div>
+        <label class="depth-control" for="tree-depth">展开<select id="tree-depth" data-testid="tree-depth" aria-label="页面展开深度"><option value="1" selected>1 层</option><option value="2">2 层</option><option value="3">3 层</option><option value="custom" disabled>手动</option></select></label>
+        <button type="button" id="missing-readmes" data-testid="missing-readmes" class="coverage-button" disabled>正在核对 README…</button>
+        <form class="search-wrap" id="search-form" role="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="tree-search" data-testid="tree-search" type="search" placeholder="搜索文件夹或职责…" aria-label="搜索文件夹或职责" autocomplete="off"><button type="submit" class="search-go" title="定位下一个结果" aria-label="定位下一个搜索结果">↵</button><span class="search-results" id="search-results" role="status"></span></form>
+        <button id="refresh-tree" class="quiet-button refresh-button" type="button" title="重新读取目录和 README"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 4v5h-5M4 16v-5h5"/><path d="M15.5 8A6 6 0 0 0 5 5M4.5 12A6 6 0 0 0 15 15"/></svg><span>刷新</span></button>
+      </div>
+
+      <div class="map-body" id="map-body">
+        <div class="canvas-wrap" id="canvas-wrap">
+          <svg id="tree-canvas" data-testid="tree-canvas" xmlns="http://www.w3.org/2000/svg" aria-label="可折叠的项目文件夹树；拖动画布平移，使用缩放按钮调整大小" role="group" tabindex="0"><g id="tree-world"></g></svg>
+          <div class="canvas-empty" id="canvas-message" role="status"><span class="loading-leaf"></span><h2>正在展开目录地图…</h2><p>读取文件夹与 Markdown 说明</p></div>
+          <div class="canvas-label"><span class="canvas-label-dot"></span><span id="canvas-project">项目目录</span></div>
+          <div class="canvas-controls" aria-label="画布控制"><button type="button" id="zoom-out" aria-label="缩小">−</button><output id="zoom-level" aria-label="当前缩放">100%</output><button type="button" id="zoom-in" aria-label="放大">+</button><span></span><button type="button" id="fit-tree" class="fit-button" title="完整显示当前展开的目录；大树的文字会相应缩小">查看全貌</button><button type="button" id="readable-tree" class="fit-button" title="按阅读大小显示，拖动画布查看其他目录">阅读大小</button><button type="button" id="reset-tree" class="reset-button" title="收起到项目的第一层目录">收起</button></div>
+          <p class="canvas-hint">拖动画布移动 <span>·</span> Ctrl + 滚轮缩放 <span>·</span> 点击节点阅读说明</p>
+        </div>
+
+        <aside id="node-drawer" class="node-drawer" aria-label="文件夹说明" hidden>
+          <div class="drawer-heading"><span class="eyebrow">FOLDER NOTES</span><button type="button" id="close-drawer" class="icon-button" aria-label="关闭文件夹说明">×</button></div>
+          <div class="drawer-intro"><div id="drawer-badge"></div><h2 id="drawer-title"></h2><p id="drawer-directory" class="directory-path"></p><p id="drawer-purpose"></p><p id="drawer-readme-notice" class="readme-notice" hidden></p></div>
+          <div class="drawer-actions"><button type="button" id="open-folder" data-testid="open-folder" class="primary-button">打开本地文件夹 <span aria-hidden="true">↗</span></button><a id="node-details" class="outline-button" href="/details">查看详情</a></div>
+          <div id="drawer-navigation" class="drawer-navigation"></div>
+          <div class="readme-header"><div><span class="eyebrow">README / 目录说明</span><p id="readme-path"></p></div><button type="button" id="readme-back" class="text-button" hidden>返回本目录</button></div>
+          <div id="readme-source" data-testid="readme-source" class="readme-source" aria-live="polite"></div>
+          <p id="source-fingerprint" class="source-fingerprint"></p>
+        </aside>
+      </div>
+
+      <footer class="map-footer"><div class="map-legend"><span><i class="legend-dot managed"></i>已接入协议</span><span><i class="legend-dot missing"></i>尚无 README</span><span id="readme-coverage" class="legend-description">仅统计当前扫描范围</span></div><span id="visible-stats"></span></footer>
+    </section>
+    <p id="tree-warnings" class="tree-warnings" role="status" hidden></p>
+  </main>
+
+  <dialog id="agent-dialog" aria-labelledby="agent-title">
+    <div class="dialog-heading"><span class="eyebrow">A SHARED WAY TO READ</span><button type="button" id="close-agent" class="icon-button" aria-label="关闭使用说明">×</button></div>
+    <h2 id="agent-title">先确定整理范围，再连接目录说明。</h2><p class="dialog-intro">由用户选择需要整理到哪一层，Agent 可以提出建议。README 的管理范围与页面的展开深度分别设置。</p>
+    <ol class="agent-steps"><li><strong>按任务选择治理深度</strong><p>有独立职责、需要频繁交接的目录可以接入 README 协议；无需给每个产物目录都添加说明。页面“尚无 README”仅帮助定位，可按需要接入。</p></li><li><strong>沿最近的 README 补齐上下文</strong><p>先读本层说明；没有说明时向上寻找最近的 README，确认目标、约束和子目录入口。职责与结论由人或 Agent 编写，工具维护父子导航。</p></li><li><strong>完成后更新受影响的说明</strong><p>更新本次工作的目录说明。若影响上层进展或结论，再核对父目录；收到上级约束变化时，也检查受影响的子目录。</p></li></ol>
+    <div class="agent-note">“展开 1 / 2 / 3 层”只改变页面展示，不创建 README，也不改变治理范围。统计仅覆盖已扫描目录，未展开内部不视为已覆盖。“已接入”表示存在协议，不表示工作或科学结论已验收。</div>
+    <button type="button" id="agent-done" class="primary-button">开始探索目录</button>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

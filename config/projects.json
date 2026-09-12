@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "projects": [
+    {
+      "id": "research-sample",
+      "title": "研究样例 · 证据与结论",
+      "root": "examples/research",
+      "source_type": "sample",
+      "mode": "protocol",
+      "scan": {
+        "exclude_dirs": [
+          ".git",
+          "node_modules",
+          "__pycache__"
+        ],
+        "max_files": 100,
+        "max_file_bytes": 1000000,
+        "max_depth": 12
+      }
+    },
+    {
+      "id": "software-sample",
+      "title": "交付样例 · 四个完成阶段",
+      "root": "examples/software",
+      "source_type": "sample",
+      "mode": "protocol",
+      "scan": {
+        "exclude_dirs": [
+          ".git",
+          "node_modules",
+          "__pycache__"
+        ],
+        "max_files": 100,
+        "max_file_bytes": 1000000,
+        "max_depth": 12
+      }
+    }
+  ]
+}

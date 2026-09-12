@@ -1,0 +1,9 @@
+[
+  {
+    "directory": ".",
+    "entry": "README.md",
+    "id": "my-project",
+    "title": "项目总览",
+    "purpose": "说明项目目标、工作范围和下级入口。"
+  }
+]

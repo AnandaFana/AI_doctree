@@ -1,0 +1,26 @@
+# Local runtimes and generated state (review history and backups stay local).
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.doctree/
+*.pyc
+
+# Own projects: keep copies here, or add each new root before copying it in.
+/numerical-2.0-5pages/
+/local-projects/
+
+# Private project maps, pilot selections, and experiment evidence.
+/config/*.local.json
+/config/numerical-pilot.json
+/artifacts/
+/CODEX_HANDOFF.md
+/docs/EXPERIMENT_REPORT.md
+/docs/NUMERICAL_MAPPING.md
+/docs/ITERATION_02.md
+/docs/ITERATION_03.md
+
+# Local credentials and machine settings; use fictional examples if needed.
+.env
+.env.*
+!.env.example

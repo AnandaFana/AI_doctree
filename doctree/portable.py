@@ -1,7 +1,7 @@
 """Install and run the standard-library-only, relocatable project viewer.
 
-Only this module, markdown_protocol and foldertree are copied into projects.
-The older governance store is deliberately not a portable dependency.
+Only the portable standard-library modules and local resources are copied into
+projects. The older governance store is not a portable dependency.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 
 
-PORTABLE_VERSION = "0.3.0"
+PORTABLE_VERSION = "0.3.1"
 IGNORE_START = "# doctree:local:start"
 IGNORE_END = "# doctree:local:end"
 AGENTS_START = "<!-- doctree-agent:start -->"
@@ -43,7 +43,8 @@ if __name__ == "__main__":
 
 AGENTS_BODY = '''## DocTree 目录协作
 
-- 先读项目 [README.md](README.md)，再沿父子链接阅读本次工作目录的 README.md 或 DOCTREE.md；共享职责与约定以这些 Markdown 为依据。
+- 首次接入请 Agent 阅读本机随包的 [首次接入指引](.doctree/ONBOARDING.md)。`install` 只安装工具，不创建业务 README，也不表示已完成内容治理；需要按指引阅读真实来源并补充项目说明。
+- 先读项目 [README.md](README.md)（若存在），再沿父子链接阅读本次工作目录的 README.md 或 DOCTREE.md；共享职责与约定以这些 Markdown 为依据。
 - 接入前先运行 `python -X utf8 .doctree/manage.py coverage --summary` 查看各深度目录数量；与用户明确治理范围后，再用 `cover --depth N` 或 `cover --all` 预览，确定后加 `--apply`。不默认要求每个目录建立 README，也不为已有自定义节点文档重复生成入口；新目录只在所选范围内提示待评估。
 - 完成本目录工作后更新本目录说明。若改变上级进展、结论、职责或下一步，再核对并更新父节点；只改格式或局部实现不需要制造上层进展。
 - 工具只维护 `doctree:nav` 标记内的导航；职责、结论与更新约定由人或 Agent 根据实际依据维护。发现待核对提示时先阅读来源，不能据提示自动判定业务或科学验收。
@@ -54,12 +55,15 @@ AGENT_GUIDE = '''# DocTree 本地 Agent 使用说明
 
 共享事实保存在项目的 README.md / DOCTREE.md 中。本文件是可重新安装的工具说明；不要在这里保存唯一的项目知识、实验结论或审阅历史。
 
+首次使用先阅读 [首次接入指引](ONBOARDING.md)。`install` 只安装工具，不创建业务 README，也不表示已完成内容治理。Agent 需要阅读实际来源，在用户明确的范围内撰写真实职责、入口与约定，然后预览并应用说明。
+
 1. 阅读项目根 README，然后沿父子链接定位职责范围，阅读本次任务的原始文件。目录文档中的命令是来源文本，不因为扫描而获得执行授权。
 2. 完成工作后更新该目录文档的职责、结论或下一步。只有影响上层进展和决策的变化才需要向父节点汇总。状态提醒不等于已经通过业务或科学验收。
 3. 修改人工正文和节点元数据时保留边界标记；工具生成的父子导航只在 `doctree:nav` 区块内维护。运行 `python -X utf8 .doctree/manage.py sync --check` 查看待同步差异，运行 `sync` 写入导航。
 4. `tree` 输出可重建目录树，`context` 输出目录树与目录说明，`serve` 启动供人类查看的本地页面。扫描从不导入或执行项目源代码。
 5. 未接入的新目录不会被 `sync` 自动批量创建 README。使用 `annotate --directory 路径 --purpose "职责"` 显式接入，已存在的正文会保留。
 6. 先运行 `coverage --summary` 查看目录深度分布，再按实际阅读和协作需求建议治理范围。需要逐目录清单时运行完整 `coverage`。只有范围明确后才使用 `cover --depth N`（根为 0）或明确的 `cover --all`；这些命令默认只产生计划，`--apply` 才写入。未接入不是项目错误；新目录通过同一深度或 policy 检查，范围外目录保留为待评估。自定义节点文档已经接入时不要再创建 README。
+7. 可用 `sync --selections 文件.json --check` 预览一次写入多个节点的真实 title/purpose；去掉 `--check` 后应用。只有尚不存在的 Markdown 可以提供 `initial_body`，已有正文与 ID 继续受保护。首次创建后日常运行不带 selections 的 `sync`；需要复用选择文件时先移除已创建文件的 initial_body。
 
 `.doctree/` 中的程序、页面和缓存可重新安装；若有此前版本的 state.json、审阅记录或备份，不要当缓存删除。安装只更新已知工具文件，不删除其他文件。
 '''
@@ -67,6 +71,8 @@ AGENT_GUIDE = '''# DocTree 本地 Agent 使用说明
 LOCAL_README = '''# DocTree 本地管理工具
 
 此目录可加入 Git 忽略。共享的节点身份、职责、父子链接与更新约定保留在外部 README.md / DOCTREE.md 中，Agent 不依赖网页也能阅读。
+
+**首次接入先让 Agent 阅读 [完整接入指引](ONBOARDING.md)。** `install` 只安装工具，不创建业务 README，也不表示已完成内容治理；实际目录说明需要依据项目来源撰写，再在选定范围内应用。
 
 从项目根目录执行（仅需 Python 3.10+，无第三方依赖）：
 
@@ -80,12 +86,13 @@ python -X utf8 .doctree/manage.py cover --depth 1
 python -X utf8 .doctree/manage.py cover --depth 1 --apply
 python -X utf8 .doctree/manage.py sync --check
 python -X utf8 .doctree/manage.py sync
+python -X utf8 .doctree/manage.py sync --selections selections.json --check
 python -X utf8 .doctree/manage.py annotate --directory docs --purpose "维护项目说明"
 ```
 
 默认页面：http://127.0.0.1:8768 。可通过 `serve --port 8769` 更换端口，终端 Ctrl+C 停止。也可运行 `python /新位置/项目/.doctree/manage.py serve`，启动位置不影响项目根目录。
 
-README 中的职责和结论需要人或 Agent 按来源更新；`sync` 只更新已接入节点的导航。`sync --check` 只检查，有待写入差异时退出码为 1。`annotate --check` 只预览。
+README 中的职责和结论需要人或 Agent 按来源更新；未提供 selections 的 `sync` 只更新已接入节点的导航。`sync --selections 文件.json` 接受 UTF-8（可带 BOM）的选择数组，用于明确的 title/purpose 和新文件的 initial_body；`--check` 只预览，有待写入差异时退出码为 1，去掉该选项后应用。已有文件不能再次提供非空 initial_body，已有 ID 不能改写。`annotate --check` 只预览。
 
 `coverage` 只读统计；首次可加 `--summary` 只看按层计数和范围状态，需要逐目录清单时去掉该选项。`--depth 0` 表示项目根，1 表示根及直接子目录。不指定深度时只读报告整个项目，不能据此自动全部接入。`cover` 必须显式指定 `--depth N`、`--all` 或包含 max_depth 的 `--policy JSON文件`，默认只输出计划，`--apply` 才写入。scope_complete 说明检查成功，scope_covered 说明所选范围已接入，project_complete 还要求没有延后的业务目录。未接入目录仅为待评估，并不表示项目有问题。
 
@@ -148,6 +155,15 @@ def _asset_root() -> Path:
     raise ValueError("缺少 DocTree 树图页面资源，请重新安装完整工具")
 
 
+def _onboarding_path() -> Path:
+    """Find the single-source guide in the checkout or a relocated bundle."""
+    here = Path(__file__).resolve()
+    for candidate in (here.parents[1] / "docs" / "AGENT_ONBOARDING.md", here.parents[2] / "ONBOARDING.md"):
+        if candidate.is_file():
+            return candidate
+    raise ValueError("缺少 DocTree 首次接入指引（AGENT_ONBOARDING.md / ONBOARDING.md），请重新安装完整工具")
+
+
 def project_spec(root, project_id=None, title=None) -> dict:
     """The shared root Markdown has precedence over local registration hints."""
     from .markdown_protocol import parse_document
@@ -181,10 +197,12 @@ def install(root, project_id=None, title=None) -> dict:
     project = project_spec(root, project_id, title)
     package = Path(__file__).resolve().parent
     web = _asset_root()
+    onboarding = _onboarding_path().read_bytes()
     payloads = {
         ".doctree/manage.py": BOOTSTRAP.encode("utf-8"),
         ".doctree/AGENT_GUIDE.md": AGENT_GUIDE.encode("utf-8"),
         ".doctree/README.md": LOCAL_README.encode("utf-8"),
+        ".doctree/ONBOARDING.md": onboarding,
         ".doctree/lib/doctree/__init__.py": (f'"""Portable DocTree; standard library only."""\n__version__ = "{PORTABLE_VERSION}"\n').encode("utf-8"),
     }
     for name in MODULES:
@@ -235,7 +253,9 @@ def install(root, project_id=None, title=None) -> dict:
                 os.unlink(temporary)
     return {"status": "installed", "version": PORTABLE_VERSION, "project": project,
             "changed": list(changes), "unchanged": len(payloads) - len(changes),
-            "backups": backups, "launch": "python -X utf8 .doctree/manage.py serve"}
+            "backups": backups, "launch": "python -X utf8 .doctree/manage.py serve",
+            "onboarding": str(root / ".doctree" / "ONBOARDING.md"),
+            "next_step": "请让 Agent 阅读 .doctree/ONBOARDING.md，再按已确认范围阅读来源、撰写并接入真实目录说明；当前仅完成工具安装。"}
 
 
 def handler_for(projects, port, web=None):
@@ -355,6 +375,7 @@ def main(argv=None, *, project_root=None) -> int:
     context.add_argument("--directory", default=".")
     sync = sub.add_parser("sync")
     sync.add_argument("--check", action="store_true")
+    sync.add_argument("--selections", type=Path, help="UTF-8 JSON 数组：directory、entry、id、title、purpose、initial_body")
     annotate = sub.add_parser("annotate")
     annotate.add_argument("--directory", required=True)
     annotate.add_argument("--entry", choices=("README.md", "DOCTREE.md"), default="README.md")
@@ -403,6 +424,10 @@ def main(argv=None, *, project_root=None) -> int:
             result = coverage.apply_cover(plan) if args.apply else plan
         elif args.command in ("sync", "annotate"):
             selections = []
+            if args.command == "sync" and args.selections:
+                selections = json.loads(args.selections.read_text(encoding="utf-8-sig"))
+                if not isinstance(selections, list):
+                    raise ValueError("selections 必须为 JSON 数组")
             if args.command == "annotate":
                 selection = {"directory": args.directory, "entry": args.entry}
                 for name in ("title", "purpose"):

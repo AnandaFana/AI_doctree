@@ -39,6 +39,10 @@ class PortableInstallTests(unittest.TestCase):
         report = portable.install(self.root, "local-hint", "Local hint")
         self.assertEqual(report["project"]["id"], "shared")
         self.assertEqual(report["project"]["title"], "Shared project")
+        self.assertEqual(report["version"], "0.3.1")
+        self.assertEqual(Path(report["onboarding"]), self.root / ".doctree/ONBOARDING.md")
+        self.assertIn("ONBOARDING.md", report["next_step"])
+        self.assertEqual(report["launch"], "python -X utf8 .doctree/manage.py serve")
         self.assertTrue(report["changed"])
         self.assertEqual(state.read_bytes(), b'{"events":["keep-history"]}')
         self.assertEqual((self.root / "README.md").read_bytes(), readme_before)
@@ -55,6 +59,8 @@ class PortableInstallTests(unittest.TestCase):
 
     def test_relocation_and_independent_stdlib_runtime(self):
         portable.install(self.root)
+        guide_before = (self.root / ".doctree/ONBOARDING.md").read_bytes()
+        self.assertEqual(guide_before, portable._onboarding_path().read_bytes())
         moved = self.area / "moved project"
         self.root.rename(moved)
         script = moved / ".doctree" / "manage.py"
@@ -76,6 +82,8 @@ class PortableInstallTests(unittest.TestCase):
                                    cwd=self.area, capture_output=True, text=True, encoding="utf-8", timeout=20)
         self.assertEqual(reinstall.returncode, 0, reinstall.stderr)
         self.assertEqual(json.loads(reinstall.stdout)["changed"], [])
+        self.assertEqual(Path(json.loads(reinstall.stdout)["onboarding"]), moved / ".doctree/ONBOARDING.md")
+        self.assertEqual((moved / ".doctree/ONBOARDING.md").read_bytes(), guide_before)
         lib = moved / ".doctree" / "lib"
         code = ("import sys; sys.path.insert(0, " + repr(str(lib)) + "); "
                 "import doctree.portable, doctree.foldertree, doctree.markdown_protocol; "
@@ -121,6 +129,81 @@ class PortableInstallTests(unittest.TestCase):
         self.assertRegex(metadata["id"], r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
         self.assertEqual(metadata["purpose"], "说明项目范围")
         self.assertIn("保留原文。", text)
+
+    def test_first_onboarding_uses_real_selections_with_stdlib_preview_apply_and_preserved_scope(self):
+        fresh = self.area / "new project"
+        fresh.mkdir()
+        (fresh / "src").mkdir()
+        (fresh / "archive").mkdir()
+        (fresh / "src/convert.py").write_text("def normalize_text(value):\n    return value.strip()\n", encoding="utf-8")
+        report = portable.install(fresh)
+        self.assertFalse((fresh / "README.md").exists())
+        self.assertFalse((fresh / "src/README.md").exists())
+        guide = Path(report["onboarding"]).read_text(encoding="utf-8-sig")
+        self.assertIn("selections", guide)
+        self.assertIn("ONBOARDING.md", (fresh / "AGENTS.md").read_text(encoding="utf-8"))
+        self.assertIn("ONBOARDING.md", (fresh / ".doctree/AGENT_GUIDE.md").read_text(encoding="utf-8"))
+        self.assertIn("ONBOARDING.md", (fresh / ".doctree/README.md").read_text(encoding="utf-8"))
+        # A project owner adds an ordinary root README after installing tools.
+        original = b"\xef\xbb\xbf# Existing project overview\r\n\r\nKeep this original project scope.\r\n"
+        (fresh / "README.md").write_bytes(original)
+        initial_body = "# 文本处理实现\n\n[convert.py](convert.py) 提供字符串两端空白清理函数。\n\n本次只整理说明，未运行项目代码或评价业务效果。\n"
+        selections = [
+            {"directory": ".", "entry": "README.md", "id": "customer", "title": "文本处理工具", "purpose": "说明文本处理工具的范围、实现入口和使用约定。"},
+            {"directory": "src", "entry": "README.md", "id": "customer.src", "title": "文本处理实现", "purpose": "维护字符串处理函数及其源码入口。", "initial_body": initial_body},
+        ]
+        selection_file = fresh / "selected-nodes.json"
+        selection_file.write_text(json.dumps(selections, ensure_ascii=False), encoding="utf-8-sig")
+        script = fresh / ".doctree/manage.py"
+        def run(*args):
+            return subprocess.run([sys.executable, "-I", "-S", "-X", "utf8", str(script), *args],
+                                  cwd=fresh, capture_output=True, text=True, encoding="utf-8", timeout=20)
+        before = {path.relative_to(fresh).as_posix(): path.read_bytes() for path in fresh.rglob("*.md")}
+        preview = run("sync", "--selections", "selected-nodes.json", "--check")
+        self.assertEqual(preview.returncode, 1, preview.stderr)
+        self.assertEqual({item["path"] for item in json.loads(preview.stdout)["changes"]}, {"README.md", "src/README.md"})
+        self.assertEqual(before, {path.relative_to(fresh).as_posix(): path.read_bytes() for path in fresh.rglob("*.md")})
+        applied = run("sync", "--selections", "selected-nodes.json")
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assertEqual(set(json.loads(applied.stdout)["written"]), {"README.md", "src/README.md"})
+        root_bytes = (fresh / "README.md").read_bytes()
+        self.assertTrue(root_bytes.startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(root_bytes.endswith(original[3:]))
+        src_text = (fresh / "src/README.md").read_text(encoding="utf-8")
+        self.assertTrue(src_text.endswith(initial_body))
+        self.assertEqual(protocol.parse_document(src_text)["purpose"], selections[1]["purpose"])
+        self.assertFalse((fresh / "archive/README.md").exists())
+        repeated = run("sync")
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        self.assertEqual(json.loads(repeated.stdout)["status"], "unchanged")
+        self.assertEqual(run("sync", "--check").returncode, 0)
+        # New-file content cannot be replayed over files that now exist.
+        self.assertEqual(run("sync", "--selections", "selected-nodes.json", "--check").returncode, 2)
+        selections[1].pop("initial_body")
+        selection_file.write_text(json.dumps(selections, ensure_ascii=False), encoding="utf-8-sig")
+        self.assertEqual(run("sync", "--selections", "selected-nodes.json", "--check").returncode, 0)
+        selections[0]["id"] = "replacement-id"
+        selection_file.write_text(json.dumps(selections, ensure_ascii=False), encoding="utf-8-sig")
+        rejected = run("sync", "--selections", "selected-nodes.json")
+        self.assertEqual(rejected.returncode, 2, rejected.stderr)
+        self.assertEqual((fresh / "README.md").read_bytes(), root_bytes)
+        self.assertEqual((fresh / "src/README.md").read_text(encoding="utf-8"), src_text)
+
+    def test_missing_onboarding_guide_fails_before_any_install_write(self):
+        fresh = self.area / "empty target"
+        fresh.mkdir()
+        (fresh / "AGENTS.md").write_text("Preserve existing agent rules.\n", encoding="utf-8")
+        before = (fresh / "AGENTS.md").read_bytes()
+        empty_package = self.area / "incomplete checkout" / "doctree"
+        empty_package.mkdir(parents=True)
+        web = portable._asset_root()
+        with patch.object(portable, "__file__", str(empty_package / "portable.py")), patch.object(portable, "_asset_root", return_value=web):
+            with self.assertRaisesRegex(ValueError, "首次接入指引"):
+                portable.install(fresh)
+        self.assertEqual((fresh / "AGENTS.md").read_bytes(), before)
+        self.assertFalse((fresh / ".doctree").exists())
+        self.assertFalse((fresh / ".gitignore").exists())
+        self.assertFalse((fresh / "README.md").exists())
 
     def test_malformed_shared_block_stops_before_any_install_write(self):
         (self.root / "AGENTS.md").write_text("User rules\n" + portable.AGENTS_START, encoding="utf-8")

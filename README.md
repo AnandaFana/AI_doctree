@@ -2,53 +2,77 @@
 
 DocTree 将目录职责、父子导航和更新约定保存在项目自己的 Markdown 中。Agent 直接沿文件阅读，人类通过可折叠的目录树浏览同一份内容；文件保持原位，治理范围由用户按实际用途选择。
 
-当前版本 **0.3.0**：文件树作为默认首页，支持展开层数、搜索、缩放和目录说明阅读。需要证据、交接与审阅历史时，可进入详细治理页。变更见 [版本说明](CHANGELOG.md)，格式见 [Markdown 节点协议 v2](docs/MARKDOWN_PROTOCOL_V2.md)。
+当前版本 **0.3.1**：文件树作为默认首页，支持展开层数、搜索、缩放和目录说明阅读。需要证据、交接与审阅历史时，可进入详细治理页。变更见 [版本说明](CHANGELOG.md)，格式见 [Markdown 节点协议 v2](docs/MARKDOWN_PROTOCOL_V2.md)。
 
-## 先试用页面
+## 首次接入：先装工具，再让 Agent 整理项目
 
-需要 Python 3.10+。克隆后从仓库根目录运行：
+安装和建立管理内容是两个阶段。完整步骤见 [首次安装指南](docs/GETTING_STARTED.md)，可执行的 Agent 指令见 [首次接入指令](docs/AGENT_ONBOARDING.md)。
+
+```mermaid
+flowchart TD
+    A[获取 DocTree 工具] --> B[安装到目标项目]
+    B --> C[Agent 阅读来源并确定治理范围]
+    C --> D[编写目录说明，预览并注入父子导航]
+    D --> E[分别检查结构与内容]
+    E --> F[打开目录树，按约定持续维护]
+```
+
+**1. 获取工具。** 需要 Git 和 Python 3.10+。在工具存放目录执行；私有仓库需有访问权限。
 
 ```powershell
 git clone https://github.com/AnandaFana/AI_doctree.git
 cd AI_doctree
-python -m pip install -r requirements.txt
-python -X utf8 -m doctree serve
 ```
 
-打开 [目录树](http://127.0.0.1:8765/) 或 [详细治理页](http://127.0.0.1:8765/details)。默认载入两个随仓库提供的教学项目，不需要任何个人研究仓库。Windows 也可运行 `.\start.ps1`，另一个终端运行 `.\stop.ps1` 停止服务；启动和停止都支持 `-Port 8766`。
-
-目录树占据页面主体，默认展开第一层，可以切换 1、2、3 层，或手动展开、平移和搜索。详细页右上方和左侧都有明显的返回入口。**页面展开层数只影响显示，不会创建 README。**
-
-开发工具的详细治理功能需要 PyYAML；下面的便携模块只依赖 Python 标准库，无需 Node、数据库、模型服务或 PyYAML。
-
-## 把轻量模块放进自己的项目
-
-从 DocTree 仓库根目录安装到一个已有项目（将 `..\my-project` 替换为实际路径）：
+**2. 安装到已有项目。** 将 `..\my-project` 换成实际目标路径。以下从工具仓库根目录执行，再进入目标项目：
 
 ```powershell
-python -X utf8 -m doctree.portable --root ..\my-project install
-cd ..\my-project
+python -X utf8 -m doctree.portable --root "..\my-project" install
+cd "..\my-project"
+```
+
+轻量接入只用 Python 标准库，无需安装 PyYAML、Node、数据库或模型服务。此时只部署了工具及 AGENTS / `.gitignore` 指引，**不会自动建立业务 README 或理解项目内容**。
+
+**3. 让 Agent 首次整理。** 在目标项目中打开 Agent，发送：
+
+```text
+请执行 .doctree/ONBOARDING.md 的首次接入流程，为当前项目建立 DocTree 目录说明。
+先阅读实际来源和目录统计，沿用已确定的治理范围；未确定时向我建议并确认范围。
+请填写有依据的职责与必要正文，预览并注入节点和父子导航，保留原文与历史。
+不要停在安装工具或生成空模板。最后分别报告结构、内容核对结果及未覆盖范围。
+不要修改业务源码、运行项目实验，或自动提交、推送目标项目。
+```
+
+范围可以是“根及直接子目录，深度 1”，也可以是“根、src、docs”。用户可以明确授权 Agent 按用途选择范围。完整指令随安装复制到 `.doctree/ONBOARDING.md`，目标项目不需要依赖原工具目录来阅读它。
+
+**4. 检查接入结果。** Agent 应核对所选范围的节点、实际职责、入口链接和未解决项；`sync --check` 只证明现有导航无差异，不能代替内容核对。空项目也可能返回无差异，不能据此宣布整理完成。
+
+**5. 打开页面。** 在目标项目根目录执行：
+
+```powershell
 python -X utf8 .doctree/manage.py serve
 ```
 
-打开 [便携目录树](http://127.0.0.1:8768/)。`serve --port 8769` 可更换端口，`Ctrl+C` 停止服务。便携包提供树图和 Markdown 阅读；完整的详细治理页由上面的开发工具服务提供。
+打开 [便携目录树](http://127.0.0.1:8768/)。`serve` 持续占用终端；其他命令在另一个终端执行，停止时按 `Ctrl+C`。端口冲突可加 `--port 8769`。
 
 ```text
 my-project/
-├── README.md          共享：职责、父子导航、更新约定与原有正文
+├── README.md           共享：职责、父子导航、更新约定与原有正文
 ├── src/
-│   └── README.md      按选定范围接入的子目录说明
-├── AGENTS.md          共享：阅读和更新指引，保留原有约定
-├── .gitignore         忽略本地 .doctree/ 管理目录
+│   └── README.md       在选定范围内由 Agent 按来源建立的说明
+├── AGENTS.md           共享：阅读和更新指引，保留原有约定
+├── doctree-policy.json 按深度治理时保存的共享范围
+├── .gitignore          忽略本地 .doctree/ 管理目录
 └── .doctree/
-    ├── manage.py      便携命令入口
-    ├── AGENT_GUIDE.md 工具操作说明
+    ├── manage.py       便携命令入口
+    ├── ONBOARDING.md   完整的 Agent 首次接入流程及流程图
+    ├── AGENT_GUIDE.md  日常操作说明
     ├── lib/           Python 标准库实现
-    ├── web/           HTML / CSS / JavaScript / SVG
+    ├── web/           树图页面
     └── backups/       写入前原文与恢复记录
 ```
 
-安装器只维护自己声明的工具文件，以及 AGENTS / `.gitignore` 中带标记的区块。共享知识保存在项目 Markdown 中；克隆项目时没带 `.doctree/`，重新安装工具即可。**Git 忽略不意味着可以随意删除**：已有治理历史 `state.json` 和原文备份无法靠扫描重建，需要另行保留。
+安装器只维护自己声明的工具文件和 AGENTS / `.gitignore` 的标记区块。共享知识保存在项目 Markdown 中，克隆项目后重新安装工具即可；已经接入的节点无需重做。**Git 忽略不意味着可以随意删除**：已有治理历史 `state.json` 和原文备份不能靠扫描重建，需要另行保留。
 
 ## 选择 README 的治理深度
 
@@ -85,9 +109,22 @@ python -X utf8 .doctree/manage.py sync
 python -X utf8 .doctree/manage.py annotate --directory . --purpose "项目目标、职责与下级入口" --check
 ```
 
-`sync --check` 有待写入差异时退出码为 1；`sync` 应用已有节点的父子导航，不批量创建普通目录的 README。更精细的接入可参考 [选择文件示例](config/selections.example.json)，从工具仓库执行 `python -m doctree sync <项目路径> --selections <选择文件> --project-id my-project` 预览，加 `--apply` 应用。
+`sync --check` 有待写入差异时退出码为 1；`sync` 应用已有节点的父子导航，不批量创建普通目录的 README。批量接入可用便携 `sync --selections 文件.json --check` 预览，去掉 `--check` 应用。选择项可为新文档提供实际 `initial_body`，已有文档不提供该字段；首次应用后日常使用不带选择文件的 `sync`。完整步骤见 [Agent 首次接入指令](docs/AGENT_ONBOARDING.md)。
 
 Agent 先读根 README，再沿链接阅读工作目录；完成工作后更新本目录，影响上级范围、结论或下一步时再核对父节点。工具负责结构和链接，`sync` 不自动总结正文、不判断业务或科学验收。当前没有持续文件监听、跨机器审阅通知或模型自动摘要。
+
+## 可选：教学样例与详细治理页
+
+若想先体验随仓库提供的两个教学项目，或查看证据、交接与审阅历史，在 **DocTree 工具仓库根目录**运行：
+
+```powershell
+python -m pip install -r requirements.txt
+python -X utf8 -m doctree serve
+```
+
+打开 [样例目录树](http://127.0.0.1:8765/) 或 [详细治理页](http://127.0.0.1:8765/details)。Windows 也可使用 `.\start.ps1` / `.\stop.ps1`，启动和停止都支持 `-Port 8766`。该服务需要 PyYAML；目标项目的轻量工具不需要这个可选步骤。
+
+目录树支持展开 1/2/3 层、搜索、平移和缩放；详细页右上方及左侧都有返回入口。页面展开层数只影响显示，不会创建 README。
 
 ## 本地项目与 Git 分开
 

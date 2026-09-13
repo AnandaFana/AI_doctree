@@ -110,9 +110,9 @@ report = apply_plan(plan)
 
 ## 5. 便携目录与日常命令
 
-安装器创建 `.doctree/manage.py`、Agent 工具说明、三个标准库模块和树图页面。通过根 `.gitignore` 的有界区块忽略 `/.doctree/`；根 `AGENTS.md` 加入简短导航指引，并保留原有用户内容。重复安装相同内容不制造重复区块，替换已有文件前保存备份。
+安装器创建 `.doctree/manage.py`、Agent 工具说明、含流程图的 `.doctree/ONBOARDING.md`、标准库模块和树图页面。通过根 `.gitignore` 的有界区块忽略 `/.doctree/`；根 `AGENTS.md` 加入简短导航指引，并保留原有用户内容。重复安装相同内容不制造重复区块，替换已有文件前保存备份。安装只部署工具，首次 README 建立与内容核对还需执行 [Agent 首次接入流程](AGENT_ONBOARDING.md)，人类操作步骤见 [安装指南](GETTING_STARTED.md)。
 
-便携代码不依赖第一版扫描器、治理存储、PyYAML、数据库或外部服务。首次安装从工具仓库运行 `python -X utf8 -m doctree.portable --root <项目路径> install`，此入口本身也只需标准库；安装后通过 `annotate` 显式接入根和子目录。兼容命令 `python -m doctree install <项目路径>` 和工作区批量 `sync` 仍会加载旧版模块，因此需要 PyYAML。
+便携代码不依赖第一版扫描器、治理存储、PyYAML、数据库或外部服务。首次安装从工具仓库运行 `python -X utf8 -m doctree.portable --root <项目路径> install`，此入口本身也只需标准库；安装后通过 `annotate` 或便携 `sync --selections 文件.json` 显式接入根和子目录。兼容命令 `python -m doctree install <项目路径>` 和工作区批量 `sync` 仍会加载旧版模块，因此需要 PyYAML。
 
 根 Markdown 的 ID 和标题优先于本机注册提示。启动器根据自身位置找到项目，移动整个项目后可继续使用；Git 克隆没有携带被忽略的 `.doctree/` 时，从工具重新安装即可。
 
@@ -128,7 +128,9 @@ python -X utf8 .doctree/manage.py annotate --directory docs --purpose "维护项
 python -X utf8 .doctree/manage.py annotate --directory docs --purpose "维护项目使用与设计说明"
 ```
 
-便携 `sync --check` / `annotate --check` 只预览，退出码为 0 表示无需改动、1 表示有差异、2 表示失败；去掉 `--check` 后应用。`annotate` 显式接入一个已存在目录，入口可选 `README.md` 或 `DOCTREE.md`。更复杂的批量与自定义文件名使用工作区的选择文件接口。
+便携 `sync --check` / `annotate --check` 只预览，退出码为 0 表示无需改动、1 表示有差异、2 表示失败；去掉 `--check` 后应用。`annotate` 显式接入一个已存在目录，入口可选 `README.md` 或 `DOCTREE.md`。便携 `sync --selections 文件.json --check` 支持批量与自定义 Markdown 文件名，选择项与第 3 节共用格式，去掉 `--check` 应用；不带选择文件时只同步已接入节点。
+
+选择项可为不存在的新节点文档提供 `initial_body`，由 Agent 阅读来源后编写实际正文。已有文件不得提供非空 `initial_body`；成功创建后，日常同步不重复提交旧创建输入。若要再次用选择文件更新职责，移除已经创建文档的 `initial_body`。该入口仍调用同一 `plan_sync` / `apply_plan`，不更改 Markdown schema 或原文保留规则。
 
 `context` 返回目标目录说明、有文档入口的祖先和直接子节点说明，并保留原始文档内容。它提供阅读上下文，不声称完成自然语言审阅。`tree` 输出可重建 JSON，没有写入第一版 `state.json` 的依赖。
 

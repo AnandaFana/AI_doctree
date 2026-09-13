@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from doctree.governance import ConflictError, StateStore
 
@@ -424,6 +425,154 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("Production acceptance is still pending.", state["nodes"]["root"]["aggregate_flags"]["unverified"])
         self.assertEqual(state["nodes"]["a"]["stages"]["delivery"], "unknown")
         self.assertEqual(state["nodes"]["a"]["summary_state"], "stale")
+
+    def test_delivery_only_evidence_change_invalidates_reviewed_leaf_and_ancestors(self):
+        extra = self.source / "extra.md"
+        extra.write_text("Additional delivery evidence v1", encoding="utf-8")
+        first_sha = hashlib.sha256(extra.read_bytes()).hexdigest()
+        self.index["projects"][0]["files"].append({"path": "extra.md", "sha256": first_sha})
+        self.store.refresh(self.index)
+        delivery = self.delivery()
+        delivery["evidence"] = [{"path": "extra.md", "label": "Delivery-only evidence"}]
+        self.store.import_delivery(delivery)
+        self.review("a", "Reviewed delivery-only evidence before it changed.")
+        self.review("alpha")
+        self.review("root")
+        self.assertEqual(self.store.pending()["count"], 0)
+        before = self.store.get_state()
+        stale = self.store.prepare_summary("a")
+        stale.update(review="reviewed", reviewer="reviewer")
+        extra.write_text("Additional delivery evidence v2", encoding="utf-8")
+        new_sha = hashlib.sha256(extra.read_bytes()).hexdigest()
+        changed = deepcopy(self.index)
+        changed["projects"][0]["files"][-1]["sha256"] = new_sha
+        after = self.store.refresh(changed)
+        self.assertEqual({node["id"] for node in self.store.pending()["nodes"]}, {"a", "alpha", "root"})
+        self.assertEqual(after["nodes"]["a"]["summary"], before["nodes"]["a"]["summary"])
+        self.assertEqual(after["nodes"]["a"]["summary_state"], "stale")
+        self.assertEqual(after["nodes"]["a"]["review"], "candidate")
+        self.assertEqual(after["nodes"]["b"]["revision"], before["nodes"]["b"]["revision"])
+        self.assertEqual(after["nodes"]["a"]["stages"]["acceptance"], "not_accepted")
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["deliveries"]["task-a"]["delivery"]["evidence"][0]["sha256"], first_sha)
+        self.assertEqual(after["nodes"]["a"]["delivery_evidence"][0]["sha256"], new_sha)
+        with self.assertRaises(ConflictError):
+            self.store.commit_summary(stale)
+        self.review("a", "Explicitly reviewed the revised additional evidence.")
+        self.review("alpha")
+        self.review("root")
+        self.assertEqual(self.store.pending()["count"], 0)
+        accepted = self.store.get_state()["nodes"]["a"]["summary_inputs"]["evidence"]
+        self.assertEqual(next(item["sha256"] for item in accepted if item["path"] == "extra.md"), new_sha)
+        refreshed = self.store.refresh(changed)
+        self.assertEqual(refreshed["nodes"]["a"]["summary_state"], "reviewed_current")
+
+    def _import_additional_evidence(self, content_version=None):
+        extra = self.source / "extra.md"
+        extra.write_text("Additional evidence", encoding="utf-8")
+        sha = hashlib.sha256(extra.read_bytes()).hexdigest()
+        info = {"path": "extra.md", "sha256": sha}
+        if content_version:
+            info["content_version"] = content_version
+        self.index["projects"][0]["files"].append(info)
+        self.store.refresh(self.index)
+        delivery = self.delivery()
+        delivery["evidence"] = [{"path": "extra.md"}]
+        self.store.import_delivery(delivery)
+        self.review("a")
+        self.review("alpha")
+        self.review("root")
+        return extra, sha
+
+    def test_dynamic_evidence_missing_restore_and_unscanned_change_remain_explicit(self):
+        extra, sha = self._import_additional_evidence()
+        extra.unlink()
+        missing = deepcopy(self.index)
+        missing["projects"][0]["files"] = [item for item in missing["projects"][0]["files"] if item["path"] != "extra.md"]
+        state = self.store.refresh(missing)
+        self.assertEqual(state["nodes"]["a"]["delivery_evidence"][0]["status"], "missing_from_manifest")
+        self.assertEqual({node["id"] for node in self.store.pending()["nodes"]}, {"a", "alpha", "root"})
+        with self.assertRaisesRegex(ValueError, "manifest"):
+            self.review("a")
+        extra.write_text("Additional evidence", encoding="utf-8")
+        self.store.refresh(self.index)
+        self.assertTrue(self.store.get_state()["nodes"]["a"]["pending"])
+        proposal = self.store.prepare_summary("a")
+        proposal.update(review="reviewed", reviewer="reviewer")
+        extra.write_text("An edit after preparation", encoding="utf-8")
+        before = self.path.read_bytes()
+        with self.assertRaises(ConflictError):
+            self.store.commit_summary(proposal)
+        with self.assertRaises(ConflictError):
+            self.store.refresh(self.index)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(json.loads(before)["deliveries"]["task-a"]["delivery"]["evidence"][0]["sha256"], sha)
+
+    def test_dynamic_generated_only_observation_preserves_review_and_accepts_latest_raw_hash(self):
+        extra, _ = self._import_additional_evidence(content_version="same-semantic-content")
+        before = self.store.get_state()
+        proposal = self.store.prepare_summary("a")
+        proposal.update(review="reviewed", reviewer="reviewer")
+        extra.write_text("Additional evidence\n<!-- generated-only navigation -->", encoding="utf-8")
+        changed = deepcopy(self.index)
+        changed["projects"][0]["files"][-1]["sha256"] = hashlib.sha256(extra.read_bytes()).hexdigest()
+        after = self.store.refresh(changed)
+        self.assertEqual(after["generation"], before["generation"])
+        self.assertEqual(after["nodes"]["a"]["revision"], before["nodes"]["a"]["revision"])
+        self.assertEqual(self.store.pending()["count"], 0)
+        self.assertEqual(self.store.commit_summary(proposal)["status"], "committed")
+
+    def test_old_snapshot_delivery_evidence_is_migrated_from_recorded_hash(self):
+        extra, original_sha = self._import_additional_evidence()
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        for meta in saved["governance"].values():
+            meta.pop("delivery_evidence")
+        self.path.write_text(json.dumps(saved), encoding="utf-8")
+        extra.write_text("Changed while still using the older application", encoding="utf-8")
+        changed = deepcopy(self.index)
+        changed["projects"][0]["files"][-1]["sha256"] = hashlib.sha256(extra.read_bytes()).hexdigest()
+        migrated = StateStore(self.path).refresh(changed)
+        self.assertTrue(migrated["nodes"]["a"]["pending"])
+        self.assertEqual(migrated["nodes"]["a"]["summary_state"], "stale")
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["deliveries"]["task-a"]["delivery"]["evidence"][0]["sha256"], original_sha)
+
+    def test_evidence_symlink_is_rejected_before_reading_its_external_target(self):
+        outside = self.root / "outside.md"
+        outside.write_text("Outside content", encoding="utf-8")
+        link = self.source / "linked.md"
+        try:
+            link.symlink_to(outside)
+        except OSError as error:
+            self.skipTest(f"Symlinks unavailable: {error}")
+        self.index["projects"][0]["files"].append({"path": "linked.md", "sha256": "declared-hash"})
+        self.store.refresh(self.index)
+        delivery = self.delivery()
+        delivery["evidence"] = [{"path": "linked.md"}]
+        with patch("doctree.governance._file_hash", side_effect=AssertionError("must not read external bytes")) as hashing:
+            with self.assertRaisesRegex(ValueError, "symbolic link|junction"):
+                self.store.import_delivery(delivery)
+            hashing.assert_not_called()
+
+    def test_explicitly_partial_scan_preserves_review_delivery_and_recovery(self):
+        self.store.import_delivery(self.delivery())
+        self.review("a", "Do not discard this authored summary.")
+        self.review("alpha")
+        self.review("root")
+        before = self.path.read_bytes()
+        partial = deepcopy(self.index)
+        del partial["nodes"]["a"]
+        partial["nodes"]["alpha"]["children"] = []
+        partial["projects"][0]["stats"] = {"bounded": True}
+        with self.assertRaisesRegex(ValueError, "incomplete|partial"):
+            self.store.refresh(partial)
+        self.assertEqual(self.path.read_bytes(), before)
+        restored = self.store.refresh(self.index)
+        self.assertEqual(restored["nodes"]["a"]["summary"], "Do not discard this authored summary.")
+        self.assertEqual(restored["nodes"]["a"]["summary_state"], "reviewed_current")
+        self.assertEqual(self.store.import_delivery(self.delivery())["status"], "duplicate")
+        changed = self.store.refresh(self.change_source("a"))
+        self.assertTrue(changed["nodes"]["a"]["pending"])
+        self.assertEqual(changed["nodes"]["a"]["summary"], "Do not discard this authored summary.")
 
 
 if __name__ == "__main__":

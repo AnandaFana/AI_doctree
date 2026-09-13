@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -19,7 +20,15 @@ TEXT_EXTENSIONS = {'.md', '.txt', '.rst', '.json', '.yaml', '.yml', '.toml', '.t
 GENERATED = re.compile(r'<!-- doctree:generated:start -->.*?<!-- doctree:generated:end -->', re.S)
 BLOCK = re.compile(r'^```(?:yaml|yml|json)\s*\n(.*?)^```\s*$', re.M | re.S)
 ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$')
-SCANNER_VERSION = 'doctree-scan-v2'
+SCANNER_VERSION = 'doctree-scan-v3'
+
+
+class IncompleteScanError(ValueError):
+    """A bounded discovery cannot safely replace the last complete index."""
+
+    def __init__(self, report):
+        self.report = report
+        super().__init__(f"扫描不完整，拒绝刷新旧索引与治理状态: {report['project_id']}: {report['reason']} ({report.get('path', '.')})")
 
 
 def now():
@@ -40,7 +49,11 @@ def file_hash(path):
 
 
 def is_link(path):
-    return path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction())
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, 'st_file_attributes', 0) & 0x400)
 
 
 def safe_path(root, relative, must_exist=True):
@@ -49,11 +62,9 @@ def safe_path(root, relative, must_exist=True):
     if rel.is_absolute() or '..' in rel.parts or ':' in str(rel):
         raise ValueError(f'路径必须在项目内: {relative}')
     target = root / rel
-    if '.git' in rel.parts or '.doctree' in rel.parts:
+    if any(part.casefold() in {'.git', '.doctree'} for part in rel.parts):
         raise ValueError('不允许读取治理内部或 Git 内部文件')
-    for parent in (root, *target.parents, target):
-        if parent == root.parent:
-            break
+    for parent in (*reversed(target.parents), target):
         if is_link(parent):
             raise ValueError(f'不跟随符号链接或目录联接: {relative}')
     try:
@@ -132,9 +143,18 @@ def scan(config_path):
             raise ValueError(f'项目根目录不存在或为链接: {root}')
         policy = {'max_files': 3000, 'max_file_bytes': 1000000, 'max_depth': 12,
                   **spec.get('scan', {})}
+        for field in ('max_files', 'max_file_bytes', 'max_depth'):
+            if type(policy[field]) is not int or policy[field] < (0 if field == 'max_depth' else 1):
+                raise ValueError(f'{field} 必须为有效整数预算')
         excludes = DEFAULT_EXCLUDES | set(policy.get('exclude_dirs', []))
         files, texts, stats = {}, {}, {'visited_files': 0, 'indexed_files': 0, 'skipped_files': 0,
-                                    'excluded_dirs': 0, 'bounded': False}
+                                    'excluded_dirs': 0, 'bounded': False, 'complete': True}
+
+        def incomplete(reason, path='.'):
+            stats.update(bounded=True, complete=False)
+            raise IncompleteScanError({'complete': False, 'scanner_version': SCANNER_VERSION,
+                                       'project_id': spec['id'], 'reason': reason, 'path': str(path),
+                                       'stats': dict(stats), 'scan_policy': dict(policy)})
 
         def read_source(relative, explicit=False):
             relative = str(relative).replace('\\', '/')
@@ -160,27 +180,34 @@ def scan(config_path):
             return text
 
         # os.walk traversal is sorted and bounded; ignored bulk trees are pruned before descent.
-        for directory, dirs, names in os.walk(root, followlinks=False):
+        for directory, dirs, names in os.walk(root, followlinks=False,
+                                               onerror=lambda error: incomplete(str(error), error.filename or '.')):
             directory = Path(directory)
             depth = len(directory.relative_to(root).parts)
-            kept = [d for d in sorted(dirs) if d not in excludes
-                    and not d.startswith('overleaf_upload') and not is_link(directory / d)
-                    and depth < int(policy['max_depth'])]
+            kept = []
+            for name in sorted(dirs):
+                if name in excludes or name.startswith('overleaf_upload'):
+                    continue
+                if is_link(directory / name):
+                    incomplete('发现不能安全读取的目录链接', directory / name)
+                if depth >= policy['max_depth']:
+                    incomplete('达到 max_depth，未完整发现节点', directory / name)
+                kept.append(name)
             stats['excluded_dirs'] += len(dirs) - len(kept)
             dirs[:] = kept
             for name in sorted(names):
                 stats['visited_files'] += 1
                 if stats['visited_files'] > int(policy['max_files']):
-                    stats['bounded'] = True
-                    break
+                    incomplete('达到 max_files，未完整发现节点', directory / name)
                 path = directory / name
-                if is_link(path) or path.suffix.lower() != '.md' or path.stat().st_size > int(policy['max_file_bytes']):
+                if path.suffix.lower() != '.md':
                     stats['skipped_files'] += 1
                     continue
+                if is_link(path):
+                    incomplete('发现不能安全读取的 Markdown 链接', path)
+                if path.stat().st_size > int(policy['max_file_bytes']):
+                    incomplete('Markdown 超过 max_file_bytes，可能遗漏节点', path)
                 read_source(path.relative_to(root).as_posix())
-            if stats['bounded']:
-                warnings.append(f'{spec["id"]}: 达到 max_files，索引为明确截断的候选')
-                break
 
         definitions = []
         lightweight = {relative: parse_document(text) for relative, text in texts.items()}
@@ -277,7 +304,7 @@ def scan(config_path):
         git = git_info(root)
         owned = {p for n in nodes.values() if n['project_id'] == spec['id'] for p in n['members']}
         unassigned = [p for p in sorted(texts) if p.endswith('.md') and p not in owned]
-        projects.append({'id': spec['id'], 'title': spec['title'], 'root': str(root.resolve()),
+        projects.append({'id': spec['id'], 'title': spec['title'], 'root': str(root.resolve()), 'complete': True,
                          'source_type': spec.get('source_type', 'external'), 'mode': spec.get('mode', 'protocol'),
                          'git': git, 'files': [files[p] for p in sorted(files)], 'stats': stats,
                          'unassigned_documents': unassigned,
@@ -314,7 +341,7 @@ def scan(config_path):
         if len(roots) != 1:
             raise ValueError(f'{project["id"]}: 每个项目必须恰有一个根节点，实际 {roots}')
         project['root_node'] = roots[0]
-    return {'schema': 1, 'scanner_version': SCANNER_VERSION,
+    return {'schema': 1, 'scanner_version': SCANNER_VERSION, 'complete': True,
             'scan_id': digest({k: n['version'] for k, n in sorted(nodes.items())}),
             'scanned_at_ns': scanned_at_ns,
             'scanned_at': now(), 'nodes': nodes, 'projects': projects, 'warnings': warnings,

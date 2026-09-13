@@ -172,6 +172,81 @@ class CoverageTests(unittest.TestCase):
         self.assertFalse(report["scope_covered"])
         self.assertFalse(report["project_complete"])
 
+    def test_cover_and_explicit_sync_use_the_same_new_id_generator(self):
+        for directory in ('a/b', 'a-b', 'a b'):
+            self.directory(directory)
+        covered = coverage.plan_cover(self.root, project_id='p', policy={'max_depth': None})
+        explicit = protocol.plan_sync(self.root, [{'directory': row['directory']}
+                                                  for row in covered['nodes']], 'p')
+        self.assertEqual({node['directory']: node['id'] for node in covered['nodes']},
+                         {node['directory']: node['id'] for node in explicit['nodes']})
+
+    def test_excluded_non_utf8_file_fails_preflight_with_global_discovery_reason(self):
+        archive = self.directory('archive')
+        invalid = archive / 'old.md'
+        invalid.write_bytes(b'# Old note\n\xff\xfe')
+        policy = {'max_depth': 1, 'exclude_dirs': ['archive']}
+        report = coverage.inspect(self.root, policy=policy)
+        self.assertTrue(report['inventory_complete'])
+        self.assertFalse(report['scope_complete'])
+        self.assertFalse(report['protocol_discovery']['complete'])
+        self.assertIn('archive/old.md', report['protocol_discovery']['errors'][0])
+        self.assertIn('exclude_dirs 只排除新增治理范围', report['protocol_discovery']['errors'][0])
+        compact = coverage.summary(report)
+        self.assertFalse(compact['protocol_discovery']['complete'])
+        with self.assertRaisesRegex(ValueError, 'archive/old.md'):
+            coverage.plan_cover(self.root, policy=policy)
+        self.assertEqual(invalid.read_bytes(), b'# Old note\n\xff\xfe')
+        self.assertFalse((self.root / 'README.md').exists())
+
+    def test_excluded_existing_nodes_stay_connected_and_keep_original_body(self):
+        self.directory('archive/batch')
+        self.directory('work')
+        original = b'# Archived source\r\nKeep the original facts.\r\n'
+        archived = self.root / 'archive/batch/README.md'
+        archived.write_bytes(original)
+        protocol.apply_plan(protocol.plan_sync(self.root, [
+            {'directory': '.', 'id': 'p'}, {'directory': 'archive', 'id': 'p.archive'},
+            {'directory': 'archive/batch', 'id': 'p.legacy-batch'}], 'p'))
+        saved_archived = archived.read_bytes()
+        policy = {'max_depth': 1, 'exclude_dirs': ['archive']}
+        report = coverage.inspect(self.root, policy=policy)
+        self.assertTrue(report['scope_complete'])
+        self.assertTrue(report['protocol_discovery']['complete'])
+        self.assertEqual(report['protocol_discovery']['outside_scope_node_count'], 2)
+        plan = coverage.plan_cover(self.root, policy=policy)
+        self.assertNotIn('archive', plan['coverage']['selected_directories'])
+        coverage.apply_cover(plan)
+        nodes = {node['id']: node for node in protocol.discover_nodes(self.root)}
+        self.assertIn('p.archive', nodes['p']['children'])
+        self.assertIn('p.legacy-batch', nodes['p.archive']['children'])
+        self.assertEqual(archived.read_bytes(), saved_archived)
+        self.assertTrue(archived.read_bytes().endswith(original))
+
+    def test_change_to_excluded_existing_node_invalidates_saved_cover_plan(self):
+        self.directory('archive')
+        self.directory('work')
+        protocol.apply_plan(protocol.plan_sync(self.root, [{'directory': '.', 'id': 'p'},
+                                                           {'directory': 'archive', 'id': 'p.archive'}], 'p'))
+        plan = coverage.plan_cover(self.root, policy={'max_depth': 1, 'exclude_dirs': ['archive']})
+        archived = self.root / 'archive/README.md'
+        archived.write_bytes(archived.read_bytes() + b'\nConcurrent archived note.\n')
+        root_before = (self.root / 'README.md').read_bytes()
+        with self.assertRaisesRegex(ValueError, '已过期'):
+            coverage.apply_cover(plan)
+        self.assertEqual((self.root / 'README.md').read_bytes(), root_before)
+        self.assertFalse((self.root / 'work/README.md').exists())
+
+    def test_global_discovery_budget_is_not_hidden_by_shallow_governance_scope(self):
+        self.directory('archive/deep')
+        report = coverage.inspect(self.root, policy={'max_depth': 0, 'max_directories': 1})
+        self.assertTrue(report['inventory_complete'])
+        self.assertFalse(report['protocol_discovery']['complete'])
+        self.assertFalse(report['scope_complete'])
+        with self.assertRaisesRegex(ValueError, '不完整'):
+            coverage.plan_cover(self.root, policy={'max_depth': 0, 'max_directories': 1})
+        self.assertFalse((self.root / 'README.md').exists())
+
 
 if __name__ == "__main__":
     unittest.main()

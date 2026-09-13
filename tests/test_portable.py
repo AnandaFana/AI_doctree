@@ -39,7 +39,7 @@ class PortableInstallTests(unittest.TestCase):
         report = portable.install(self.root, "local-hint", "Local hint")
         self.assertEqual(report["project"]["id"], "shared")
         self.assertEqual(report["project"]["title"], "Shared project")
-        self.assertEqual(report["version"], "0.3.1")
+        self.assertEqual(report["version"], "0.4.0")
         self.assertEqual(Path(report["onboarding"]), self.root / ".doctree/ONBOARDING.md")
         self.assertIn("ONBOARDING.md", report["next_step"])
         self.assertEqual(report["launch"], "python -X utf8 .doctree/manage.py serve")
@@ -77,7 +77,8 @@ class PortableInstallTests(unittest.TestCase):
         exported = json.loads(context.stdout)
         self.assertEqual(exported["target"]["directory"], "docs")
         self.assertEqual(exported["ancestors"][0]["directory"], ".")
-        self.assertIn("Keep this paragraph.", exported["ancestors"][0]["document"]["content"])
+        self.assertEqual(exported["ancestors"][0]["purpose"], "Provide the project entry")
+        self.assertNotIn("document", exported["ancestors"][0])
         reinstall = subprocess.run([sys.executable, "-I", "-S", "-X", "utf8", str(script), "install"],
                                    cwd=self.area, capture_output=True, text=True, encoding="utf-8", timeout=20)
         self.assertEqual(reinstall.returncode, 0, reinstall.stderr)

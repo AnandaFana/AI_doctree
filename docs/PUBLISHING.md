@@ -11,6 +11,7 @@
 | 自有项目副本 | `local-projects/`，或显式忽略的项目根 | 忽略 |
 | 本机项目映射与路径 | `config/projects.local.json` | 忽略 |
 | 工具状态、审阅历史、备份 | `.doctree/` | 忽略，但须保留和备份 |
+| 可选 v2 文档核对基线与最近声明 | `doctree-review.json` | 随所属项目提交；理由不填写凭据或无关私密内容 |
 | 原始试点清单、截图、校验日志 | `artifacts/` 及显式忽略的试点材料 | 忽略 |
 
 默认使用 `config/projects.local.json`（若存在），否则使用教学配置；命令行 `--config` 可显式选择。不同配置建议使用不同 `--state-dir`，不把个人路径写进公开默认配置。

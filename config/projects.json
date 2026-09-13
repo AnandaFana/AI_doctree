@@ -2,6 +2,18 @@
   "schema": 1,
   "projects": [
     {
+      "id": "v2-sample",
+      "title": "轻量 v2 · 文档核对样例",
+      "root": "examples/v2",
+      "source_type": "sample",
+      "mode": "protocol",
+      "scan": {
+        "max_files": 100,
+        "max_file_bytes": 1000000,
+        "max_depth": 12
+      }
+    },
+    {
       "id": "research-sample",
       "title": "研究样例 · 证据与结论",
       "root": "examples/research",

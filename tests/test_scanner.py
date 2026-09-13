@@ -4,7 +4,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from doctree.scanner import scan, safe_path, metadata, file_hash
+from doctree.scanner import scan, safe_path, metadata, file_hash, IncompleteScanError
 from doctree.markdown_protocol import plan_sync, apply_plan
 
 
@@ -112,6 +112,56 @@ class ScannerTests(unittest.TestCase):
         self.assertFalse(any(file['path'].startswith('history/') for file in result['projects'][0]['files']))
         self.assertFalse(result['projects'][0]['scan_policy']['full_directory_coverage'])
         self.assertIn('no independent full-directory', result['projects'][0]['scan_policy']['markdown_metadata_scope'])
+
+    def test_file_and_depth_budget_refuse_partial_node_indexes(self):
+        self.node('README.md', 'p')
+        self.node('child/README.md', 'p.child', 'p')
+        for limits in ({'max_files': 1}, {'max_depth': 0}):
+            with self.subTest(limits=limits):
+                self.spec['projects'][0]['scan'] = limits
+                self.write_config()
+                with self.assertRaisesRegex(ValueError, '不完整|incomplete'):
+                    scan(self.config)
+
+    def test_application_keeps_state_and_index_bytes_when_budget_scan_fails(self):
+        from doctree.cli import Application
+        self.node('README.md', 'p')
+        self.node('child/README.md', 'p.child', 'p')
+        app = Application(self.config, self.root / 'state')
+        state = app.refresh()
+        app.store.import_delivery({'task_id': 'kept-delivery', 'node_id': 'p.child',
+                                   'based_on_version': state['nodes']['p.child']['version'],
+                                   'evidence': [{'path': 'child/README.md'}],
+                                   'summary_candidate': 'Preserve this authored delivery.'})
+        for node_id in ('p.child', 'p'):
+            proposal = app.store.prepare_summary(node_id)
+            proposal.update(summary='Reviewed ' + node_id, review='reviewed', reviewer='test-reviewer')
+            app.store.commit_summary(proposal)
+        state_path, index_path = self.root / 'state/state.json', self.root / 'state/index.json'
+        before = (state_path.read_bytes(), index_path.read_bytes())
+        self.spec['projects'][0]['scan'] = {'max_files': 1}
+        self.write_config()
+        with self.assertRaises(IncompleteScanError) as failure:
+            app.refresh()
+        self.assertFalse(failure.exception.report['complete'])
+        self.assertEqual(failure.exception.report['scanner_version'], 'doctree-scan-v3')
+        self.assertEqual((state_path.read_bytes(), index_path.read_bytes()), before)
+        self.spec['projects'][0]['scan'] = {}
+        self.write_config()
+        restored = app.refresh()
+        self.assertEqual(restored['nodes']['p.child']['summary'], 'Reviewed p.child')
+        self.assertEqual(restored['nodes']['p.child']['summary_state'], 'reviewed_current')
+        self.assertTrue(any(event.get('task_id') == 'kept-delivery' for event in restored['events']))
+
+    def test_oversized_markdown_refuses_to_hide_a_previously_discoverable_node(self):
+        self.node('README.md', 'p')
+        self.node('child/README.md', 'p.child', 'p')
+        self.spec['projects'][0]['scan'] = {'max_file_bytes': 8}
+        self.write_config()
+        with self.assertRaises(IncompleteScanError) as failure:
+            scan(self.config)
+        self.assertIn('max_file_bytes', failure.exception.report['reason'])
+        self.assertTrue(failure.exception.report['stats']['bounded'])
 
 
 if __name__ == '__main__':

@@ -53,12 +53,19 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _discovery_options(rules):
+    """Scope exclusions select new work, never hide existing navigation nodes."""
+    return {"max_depth": rules["max_scan_depth"], "max_files": rules["max_markdown_files"],
+            "max_directories": rules["max_directories"], "max_file_bytes": rules["max_file_bytes"],
+            "max_total_bytes": rules["max_total_bytes"]}
+
+
 def inspect(root, *, policy=None):
     """Inspect all normal directories in the selected depth without mutations.
 
-    scope_complete means enumeration succeeded; scope_covered additionally
-    requires managed documentation. project_complete also requires no deferred
-    directory roots. Explicit cache/metadata exclusions are always reported.
+    scope_complete requires selected inventory and global protocol discovery to
+    succeed; scope_covered also requires managed documentation. User exclusions
+    select new governance work and never remove existing nodes from discovery.
     """
     root = protocol._root(root)
     rules = normalize_policy(policy)
@@ -173,20 +180,43 @@ def inspect(root, *, policy=None):
     counts.update(directories=len(directories), excluded_roots=len(excluded), deferred_roots=len(deferred),
                   readme_present=sum(row["has_readme"] for row in directories), markdown_files=markdown_count,
                   markdown_bytes=total_bytes)
-    scope_complete = not errors
+    inventory_complete = not errors
+    discovery_options = _discovery_options(rules)
+    protocol_discovery = {"complete": False, "scope": "project-wide existing-node discovery",
+                          "policy": discovery_options, "managed_nodes": None,
+                          "outside_scope_node_count": None, "snapshot_sha256": None, "errors": []}
+    try:
+        discovered = protocol.discover_nodes(root, **discovery_options)
+        selected_directories = {row["directory"] for row in directories}
+        protocol_discovery.update(
+            complete=True, managed_nodes=len(discovered),
+            outside_scope_node_count=sum(node["directory"] not in selected_directories for node in discovered),
+            snapshot_sha256=_digest([{key: node[key] for key in ("id", "path", "sha256", "parent", "children")}
+                                     for node in discovered]))
+    except (OSError, ValueError) as exc:
+        reason = (f"全局节点发现失败：{exc}。exclude_dirs 只排除新增治理范围，不能绕过既有父子导航发现；"
+                  "请根据该路径核对来源，是否处理编码或重新选择项目根由用户决定。")
+        protocol_discovery["errors"].append(reason)
+        errors.append({"directory": ".", "stage": "protocol_discovery", "reason": reason})
+    scope_complete = inventory_complete and protocol_discovery["complete"]
     scope_covered = scope_complete and counts["managed"] == counts["directories"]
     custom_exclusions = set(rules["exclude_dirs"]) - {name.casefold() for name in DEFAULT_EXCLUDES}
     omitted_custom = any(item.get("rule") in custom_exclusions for item in excluded)
     return {"schema": 1, "root": str(root), "policy": rules, "scope_complete": scope_complete,
+            "inventory_complete": inventory_complete, "protocol_discovery": protocol_discovery,
             "scope_covered": scope_covered, "project_complete": scope_covered and not deferred and not omitted_custom,
             "counts": counts, "by_depth": [{"depth": depth, **{key: count[key] for key in ("directories", "managed", "unmanaged", "missing", "error")}} for depth, count in sorted(depth_counts.items())],
             "directories": directories, "excluded": excluded, "deferred": deferred, "errors": errors,
-            "snapshot_sha256": _digest([{key: row[key] for key in ("directory", "status", "entry", "node_id", "inventory_sha256")} for row in directories]),
-            "notice": "未接入目录是待评估范围，不表示项目有问题。先按层统计选择需要治理的深度；页面展开深度不决定治理范围。"}
+            "snapshot_sha256": _digest({"inventory": [{key: row[key] for key in ("directory", "status", "entry", "node_id", "inventory_sha256")} for row in directories],
+                                         "protocol_discovery": protocol_discovery["snapshot_sha256"]}),
+            "notice": "未接入目录是待评估范围，不表示项目有问题。治理深度与 exclude_dirs 只选择新增工作范围；全局既有节点仍参与父子导航发现。页面展开深度不决定治理范围。"}
 
 
 def summary(report):
-    return {key: report[key] for key in ("scope_complete", "scope_covered", "project_complete", "counts", "by_depth", "notice")}
+    result = {key: report[key] for key in ("scope_complete", "scope_covered", "project_complete", "inventory_complete", "counts", "by_depth", "notice")}
+    result["protocol_discovery"] = {key: report["protocol_discovery"][key] for key in
+                                    ("complete", "scope", "managed_nodes", "outside_scope_node_count", "errors")}
+    return result
 
 
 def _label(value):
@@ -238,7 +268,7 @@ def plan_cover(root, *, project_id=None, policy=None, overrides=None):
             continue
         item = {"directory": row["directory"], "entry": row["entry"] or "README.md"}
         if row["status"] != "managed":
-            item["id"] = project_id if row["directory"] == "." else project_id[:130] + ".d." + hashlib.sha256(row["directory"].encode()).hexdigest()[:16]
+            item["id"] = protocol.generated_node_id(project_id, row["directory"])
             item["title"] = row["title"].replace("\r", " ").replace("\n", " ")
             item["purpose"] = "本目录的导航与说明入口；具体职责待人或 Agent 根据来源补充。"
             if row["status"] == "missing":
@@ -248,9 +278,7 @@ def plan_cover(root, *, project_id=None, policy=None, overrides=None):
     rules = report["policy"]
     # Discovery remains project-wide so out-of-scope existing nodes keep their
     # relationships. Scope filters only new selections, never the existing tree.
-    discovery = {"max_depth": rules["max_scan_depth"], "max_files": rules["max_markdown_files"],
-                 "max_directories": rules["max_directories"], "max_file_bytes": rules["max_file_bytes"],
-                 "max_total_bytes": rules["max_total_bytes"]}
+    discovery = _discovery_options(rules)
     plan = protocol.plan_sync(root, selections, project_id, discovery_options=discovery)
     plan["coverage"] = {**summary(report), "policy": rules, "snapshot_sha256": report["snapshot_sha256"],
                         "selected_directories": [item["directory"] for item in selections],

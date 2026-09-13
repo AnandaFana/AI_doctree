@@ -5,6 +5,8 @@ This module has no dependency on the legacy catalog, governance store or PyYAML.
 from __future__ import annotations
 
 import hashlib
+import codecs
+import json
 from itertools import islice
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -90,31 +92,237 @@ def open_folder(projects, project_id, directory):
     return {'opened': True, 'path': str(target)}
 
 
-def context(projects, project_id, directory='.'):
-    project = _project(projects, project_id)
-    project_path(project['root'], directory, directory=True)
-    tree = build_tree([project], max_depth=12)
-    relative = PurePosixPath(str(directory).replace('\\', '/')).as_posix()
-    target = next((n for n in tree['nodes'].values() if n['directory'] == relative), None)
-    if target is None:
-        raise ValueError('该目录未在受限扫描中展开；请使用更上层的 README 导航')
-    def document(node):
-        result = {key: node[key] for key in ('id', 'directory', 'entry', 'managed', 'purpose', 'version')}
-        if node['entry']:
-            result['document'] = read_source([project], project_id, node['entry'])
+class _ContextReader:
+    """Inspect individual directories, without walking any descendant tree."""
+
+    def __init__(self, project, max_entries, max_bytes, max_body_chars):
+        self.project = project
+        self.root = Path(project['root']).absolute()
+        self.max_entries, self.max_bytes = max_entries, max_bytes
+        self.max_body_chars = max_body_chars
+        self.bytes_read = 0
+        self.entries = {}
+        self.warnings = []
+        self.warnings_omitted = 0
+        self.entries_partial = self.source_partial = self.metadata_partial = False
+
+    def warn(self, text):
+        if len(self.warnings) < 8:
+            self.warnings.append(str(text)[:240])
+        else:
+            self.warnings_omitted += 1
+
+    def listing(self, directory):
+        relative = directory.relative_to(self.root).as_posix()
+        if relative in self.entries:
+            return self.entries[relative]
+        partial = False
+        try:
+            found = list(islice(directory.iterdir(), self.max_entries + 1))
+            partial = len(found) > self.max_entries
+            found = found[:self.max_entries]
+        except OSError as exc:
+            found, partial = [], True
+            self.warn(f'{relative}: 目录读取失败: {exc}')
+        if partial:
+            self.entries_partial = True
+            self.warn(f'{relative}: 目录条目未完整读取，最多检查 {self.max_entries} 项')
+            # A selected path and conventional entry never depend on sibling order.
+            for name in ('README.md', 'DOCTREE.md'):
+                entry = directory / name
+                if entry not in found and not _link(entry) and entry.is_file():
+                    found.append(entry)
+        found = [entry for entry in found if not entry.name.startswith('.')
+                 and entry.name.casefold() not in HIDDEN and not _link(entry)]
+        found.sort(key=lambda entry: (entry.name.casefold(), entry.name))
+        self.entries[relative] = (found, partial)
+        return found, partial
+
+    def read_document(self, path):
+        relative = path.relative_to(self.root).as_posix()
+        limit = min(MAX_TEXT, self.max_bytes - self.bytes_read)
+        if limit <= 0:
+            self.source_partial = True
+            return None
+        try:
+            checked = project_path(self.root, relative)
+            with checked.open('rb') as stream:
+                size = os.fstat(stream.fileno()).st_size
+                raw = stream.read(limit)
+            self.bytes_read += len(raw)
+            partial = len(raw) < size
+            decoder = codecs.getincrementaldecoder('utf-8-sig')('strict')
+            text = decoder.decode(raw, final=not partial)
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.warn(f'{relative}: 无法读取目录说明: {exc}')
+            self.source_partial = True
+            return None
+        if partial:
+            self.source_partial = True
+            self.warn(f'{relative}: 来源读取达到字节预算；正文与版本信息不完整')
+        metadata_partial = False
+        try:
+            meta = parse_document(text)
+            version = hashlib.sha256(semantic_text(text).encode()).hexdigest() if not partial else None
+        except ValueError as exc:
+            self.warn(f'{relative}: 节点头部未完整解析: {exc}')
+            meta, version = None, None
+            metadata_partial = True
+        return {'path': relative, 'text': text, 'meta': meta, 'version': version,
+                'sha256': hashlib.sha256(raw).hexdigest() if len(raw) == size else None,
+                'source_bytes': size, 'partial': partial, 'metadata_partial': metadata_partial}
+
+    def describe(self, directory, *, with_body=False, target=False):
+        relative = directory.relative_to(self.root).as_posix()
+        entries, incomplete = self.listing(directory)
+        candidates = [entry for entry in entries if entry.suffix.lower() == '.md' and entry.is_file()]
+        candidates.sort(key=lambda entry: (entry.name.casefold() != 'readme.md',
+                                           entry.name.casefold() != 'doctree.md', entry.name.casefold()))
+        primary, chosen, managed = None, None, []
+        for entry in candidates:
+            if primary is None and entry.name.casefold() in ('readme.md', 'doctree.md'):
+                primary = entry
+            data = self.read_document(entry)
+            if data is None:
+                incomplete = True
+                if self.bytes_read >= self.max_bytes:
+                    self.warn(f'{relative}: 达到上下文 Markdown 读取预算，目录元数据可能不完整')
+                    break
+                continue
+            incomplete = incomplete or data['partial'] or data['metadata_partial']
+            if primary == entry:
+                chosen = data
+            if data['meta']:
+                managed.append((entry, data))
+        if len(managed) > 1:
+            raise ValueError(f'{relative}: 一个目录只能有一份 DocTree 节点文档')
+        if managed:
+            primary, chosen = managed[0]
+        meta = chosen['meta'] if chosen else None
+        title = meta['title'] if meta else self.project['title'] if relative == '.' else directory.name
+        purpose = meta.get('purpose', '') if meta else ''
+        field_truncated = len(title) > 160 or len(purpose) > 800
+        result = {'title': title[:160], 'directory': relative,
+                  'entry': primary.relative_to(self.root).as_posix() if primary else None,
+                  'purpose': purpose[:800]}
+        if incomplete or field_truncated:
+            result['metadata_incomplete'] = True
+            self.metadata_partial = True
+        if target:
+            result.update({'id': meta['id'] if meta else 'folder.' + hashlib.sha256(
+                f'{self.project["id"]}:{relative}'.encode()).hexdigest()[:20],
+                'managed': bool(meta), 'version': chosen['version'] if chosen else None})
+        if with_body and primary:
+            text = chosen['text'] if chosen else ''
+            partial = chosen is None or chosen['partial']
+            content = text[:self.max_body_chars]
+            result['document'] = {'path': result['entry'], 'content': content,
+                                  'sha256': chosen['sha256'] if chosen else None,
+                                  'source_bytes': chosen['source_bytes'] if chosen else None,
+                                  'source_chars': len(text) if not partial else None,
+                                  'content_chars': len(content), 'source_truncated': partial,
+                                  'content_truncated': partial or len(content) < len(text)}
         return result
-    ancestors = []
-    parent = target['parent']
-    while parent:
-        node = tree['nodes'][parent]
-        if node['entry']:
-            ancestors.append(document(node))
-        parent = node['parent']
-    return {'schema': 2, 'source_of_truth': 'Markdown files in project', 'project_id': project_id,
-            'target': document(target), 'ancestors': list(reversed(ancestors)),
-            'children': [document(tree['nodes'][i]) for i in target['children']],
-            'notice': '先阅读祖先约束与本目录文档。完成后更新本页，影响上层范围、结论或下一步时核对父页。',
-            'warnings': tree['warnings']}
+
+
+def _context_output_size(result):
+    # The portable CLI uses this same human-readable serialization and newline.
+    size = len(json.dumps(result, ensure_ascii=False, indent=2)) + 1
+    while result['usage']['output_chars'] != size:
+        result['usage']['output_chars'] = size
+        size = len(json.dumps(result, ensure_ascii=False, indent=2)) + 1
+    return size
+
+
+def _bound_context(result, max_chars):
+    """Keep target identity and entry intact; report every discarded payload."""
+    def shorten_body(item, excess):
+        document = item.get('document')
+        if not document or not document['content']:
+            return False
+        document['content'] = document['content'][:max(0, len(document['content']) - excess)]
+        document['content_chars'] = len(document['content'])
+        document['content_truncated'] = True
+        return True
+
+    # Optional bodies yield first, then target prose, then whole directory records.
+    optional = list(reversed(result['children'])) + list(reversed(result['ancestors']))
+    while (size := _context_output_size(result)) > max_chars:
+        result['truncation']['output'] = True
+        excess = size - max_chars + 32
+        if any(shorten_body(item, excess) for item in optional):
+            continue
+        if shorten_body(result['target'], excess):
+            continue
+        if result['children']:
+            result['children'].pop()
+            result['truncation']['children_omitted'] += 1
+            result['usage']['children_returned'] = len(result['children'])
+            continue
+        if result['ancestors']:
+            result['ancestors'].pop(1 if len(result['ancestors']) > 2 else 0)
+            result['truncation']['ancestors_omitted'] += 1
+            result['usage']['ancestors_returned'] = len(result['ancestors'])
+            continue
+        if result['warnings']:
+            result['warnings'].pop()
+            result['truncation']['warnings_omitted'] += 1
+            continue
+        raise ValueError('max_chars 不足以保留目标目录身份和路径，请增大上下文输出预算')
+    return result
+
+
+def context(projects, project_id, directory='.', *, body_scope='target', max_chars=24_000,
+            max_body_chars=8_000, max_ancestors=8, max_children=20,
+            max_entries_per_directory=3000, max_markdown_bytes=4_000_000):
+    """Read an explicit path and its immediate context, independently of the UI.
+
+    ``body_scope`` is ``target`` (default), ``none`` or ``all``. Ancestors and
+    children otherwise contain only title, responsibility and project-relative
+    paths. ``max_chars`` caps indented UTF-8 JSON characters, including its final
+    newline; counts and truncation flags distinguish limits from complete reads.
+    """
+    for name, value, minimum in (('max_chars', max_chars, 4096), ('max_body_chars', max_body_chars, 0),
+                                ('max_ancestors', max_ancestors, 0), ('max_children', max_children, 0),
+                                ('max_entries_per_directory', max_entries_per_directory, 1),
+                                ('max_markdown_bytes', max_markdown_bytes, 1)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+            raise ValueError(f'{name} 必须是至少 {minimum} 的整数')
+    if not isinstance(body_scope, str) or body_scope not in ('target', 'none', 'all'):
+        raise ValueError('body_scope 必须为 target、none 或 all')
+    project = _project(projects, project_id)
+    target_path = project_path(project['root'], directory, directory=True)
+    reader = _ContextReader(project, max_entries_per_directory, max_markdown_bytes, max_body_chars)
+    relative = target_path.relative_to(reader.root)
+    ancestor_paths = [reader.root.joinpath(*relative.parts[:depth]) for depth in range(len(relative.parts))]
+    if len(ancestor_paths) > max_ancestors:
+        selected_ancestors = ([ancestor_paths[0]] + ancestor_paths[-(max_ancestors - 1):]
+                              if max_ancestors > 1 else ancestor_paths[:max_ancestors])
+    else:
+        selected_ancestors = ancestor_paths
+    target = reader.describe(target_path, with_body=body_scope != 'none', target=True)
+    entries, entries_partial = reader.listing(target_path)
+    child_paths = [entry for entry in entries if entry.is_dir()]
+    ancestors = [reader.describe(path, with_body=body_scope == 'all') for path in selected_ancestors]
+    children = [reader.describe(path, with_body=body_scope == 'all') for path in child_paths[:max_children]]
+    result = {'schema': 2, 'context_format': 2, 'source_of_truth': 'Markdown files in project',
+              'project_id': project_id, 'target': target, 'ancestors': ancestors, 'children': children,
+              'budgets': {'body_scope': body_scope, 'max_chars': max_chars, 'max_body_chars': max_body_chars,
+                          'max_ancestors': max_ancestors, 'max_children': max_children,
+                          'max_entries_per_directory': max_entries_per_directory,
+                          'max_markdown_bytes': max_markdown_bytes},
+              'usage': {'output_chars': 0, 'markdown_bytes_read': reader.bytes_read,
+                        'directories_read': len(reader.entries), 'ancestors_available': len(ancestor_paths),
+                        'ancestors_returned': len(ancestors), 'children_discovered': len(child_paths),
+                        'children_returned': len(children), 'child_count_complete': not entries_partial},
+              'truncation': {'output': False, 'ancestors_omitted': len(ancestor_paths) - len(ancestors),
+                             'children_omitted': len(child_paths) - len(children),
+                             'directory_entries': reader.entries_partial, 'source_read': reader.source_partial,
+                             'metadata': reader.metadata_partial, 'warnings_omitted': reader.warnings_omitted},
+              'notice': '先阅读祖先职责与目标说明；需要祖先或子目录正文时显式读取入口或选择 body_scope=all。'
+                        '完成本目录工作后更新本页，影响上层范围、结论或下一步时核对父页。',
+              'warnings': reader.warnings}
+    return _bound_context(result, max_chars)
 
 
 def build_tree(projects, *, max_depth=3, max_nodes=350, max_entries_per_directory=3000,

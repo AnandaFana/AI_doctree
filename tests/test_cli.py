@@ -16,7 +16,7 @@ class ProjectConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             app = Application(config, Path(temp))
             state = app.refresh()
-            self.assertEqual(len(state['projects']), 2)
+            self.assertEqual(len(state['projects']), 3)
             self.assertTrue(state['nodes'])
 
     def test_local_config_precedence_and_explicit_override(self):

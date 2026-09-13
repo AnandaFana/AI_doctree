@@ -41,7 +41,9 @@ class Application:
 
     def tree(self):
         from .foldertree import build_tree
-        result = build_tree(self.project_specs())
+        from .maintenance import attach
+        projects = self.project_specs()
+        result = attach(build_tree(projects), projects)
         result['viewer'] = {'detailed_governance': True}
         return result
 

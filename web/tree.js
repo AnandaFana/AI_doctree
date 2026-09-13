@@ -143,9 +143,10 @@ function renderCard(item, position) {
   card.append(svgElement('path',{class:'node-folder-icon',d:'M17 25v-8a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H19a2 2 0 0 1-2-2Z'}));
   card.append(svgElement('text',{class:'node-title',x:46,y:30},[shorten(nodeTitle(item),28)]));
   card.append(svgElement('text',{class:'node-purpose',x:18,y:50},[shorten(purpose(item),43)]));
-  const badgeText = missingReadme ? '尚无 README' : managed ? '已接入' : '有 README';
-  const badgeWidth = missingReadme ? 74 : managed ? 45 : hasReadme(item) ? 66 : 45;
-  const badgeClass = missingReadme ? ' missing' : managed ? '' : ' unmanaged';
+  const needsReview = item.maintenance?.status === 'needs_review';
+  const badgeText = needsReview ? '待核对说明' : missingReadme ? '尚无 README' : managed ? '已接入' : '有 README';
+  const badgeWidth = needsReview || missingReadme ? 74 : managed ? 45 : hasReadme(item) ? 66 : 45;
+  const badgeClass = needsReview || missingReadme ? ' missing' : managed ? '' : ' unmanaged';
   card.append(svgElement('rect',{class:`node-badge-bg${badgeClass}`,x:18,y:61,width:badgeWidth,height:15,rx:4}));
   card.append(svgElement('text',{class:`node-badge${badgeClass}`,x:18 + badgeWidth/2,y:72,'text-anchor':'middle'},[badgeText]));
   const totalKids = childNodes(item).length;
@@ -217,6 +218,12 @@ function selectNode(id, center = false) {
   $('#node-drawer').hidden = false;
   $('#drawer-badge').replaceChildren();
   const badge = document.createElement('span'); badge.className = `drawer-badge${item.managed?'':' unmanaged'}`; badge.textContent = item.managed ? '已接入目录说明' : '未接入'; $('#drawer-badge').append(badge);
+  if(item.maintenance) {
+    const review = document.createElement('span'); review.className = 'drawer-badge';
+    review.textContent = item.maintenance.status === 'needs_review' ? '有变化，待核对说明' : item.maintenance.status === 'reviewed' ? '已记录文档核对' : '已建立比较基线';
+    review.title = '文档核对由 Agent 或人声明，不代表业务验收。收尾时运行 review check；按需要逐级判断上级影响。';
+    $('#drawer-badge').append(review);
+  }
   $('#drawer-title').textContent = nodeTitle(item);
   $('#drawer-directory').textContent = item.directory === '.' ? '项目根目录 /' : item.directory || '/';
   $('#drawer-purpose').textContent = purpose(item);

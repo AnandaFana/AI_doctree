@@ -39,6 +39,24 @@ def _hash(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def generated_node_id(project_id, directory):
+    """Generate a new identity; existing annotated IDs never use this helper.
+
+    The hash includes the complete project identity and normalized directory, so
+    separators, spaces and long project prefixes cannot collapse distinct paths.
+    """
+    if not isinstance(project_id, str) or not ID_PATTERN.fullmatch(project_id):
+        raise ValueError('project_id 格式无效')
+    relative = Path(str(directory).replace('\\', '/'))
+    if relative.is_absolute() or '..' in relative.parts or ':' in str(relative):
+        raise ValueError('生成节点 id 需要项目内相对目录')
+    normalized = relative.as_posix()
+    if normalized == '.':
+        return project_id
+    fingerprint = _hash((project_id + '\0' + normalized).encode('utf-8'))[:16]
+    return project_id[:130] + '.d.' + fingerprint
+
+
 def _is_link(path):
     info = path.lstat()
     return (stat.S_ISLNK(info.st_mode)
@@ -356,9 +374,7 @@ def plan_sync(root, selections, project_id, *, discovery_options=None):
             if 'id' in selection and selection['id'] != node['id']:
                 raise ValueError('已有节点 id 不可通过 sync 改写')
         else:
-            slug = re.sub(r'[^A-Za-z0-9_.:-]+', '-', relative_dir).strip('.-')
-            generated_id = project_id if relative_dir == '.' else project_id + '.' + (slug or _hash(relative_dir.encode())[:12])
-            node_id = selection.get('id', generated_id)
+            node_id = selection.get('id', generated_node_id(project_id, relative_dir))
             if not isinstance(node_id, str) or not ID_PATTERN.fullmatch(node_id):
                 raise ValueError('节点 id 格式无效；较长目录可显式指定较短 id')
             node = {'schema': SCHEMA_VERSION, 'id': node_id, 'directory': relative_dir,

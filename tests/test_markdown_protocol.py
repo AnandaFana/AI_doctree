@@ -1,4 +1,6 @@
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 import os
 from pathlib import Path
 import subprocess
@@ -315,6 +317,36 @@ print(report['status'])
         with patch.object(module.os, 'walk', side_effect=unreadable_walk):
             with self.assertRaisesRegex(ValueError, '拒绝生成部分导航'):
                 plan_sync(self.root, [], 'demo')
+
+    def test_generated_ids_distinguish_path_separators_and_preserve_existing_ids(self):
+        from doctree.markdown_protocol import generated_node_id
+        for directory in ('a/b', 'a-b', 'a b'):
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+        plan = plan_sync(self.root, [{'directory': directory} for directory in ('a/b', 'a-b', 'a b')], 'demo')
+        ids = {node['directory']: node['id'] for node in plan['nodes']}
+        self.assertEqual(len(set(ids.values())), 3)
+        self.assertEqual(ids['a/b'], generated_node_id('demo', 'a\\b'))
+        apply_plan(plan, self.backups)
+        self.assertEqual(plan_sync(self.root, [], 'demo')['changes'], [])
+        self.assertNotEqual(generated_node_id('x' * 130 + 'one', 'a'),
+                            generated_node_id('x' * 130 + 'two', 'a'))
+        self.assertLessEqual(len(generated_node_id('x' * 160, 'deep/path')), 160)
+        (self.root / 'legacy').mkdir()
+        self.sync([{'directory': 'legacy', 'id': 'demo.old-path-style'}])
+        existing = next(node for node in plan_sync(self.root, [{'directory': 'legacy'}], 'demo')['nodes']
+                        if node['directory'] == 'legacy')
+        self.assertEqual(existing['id'], 'demo.old-path-style')
+
+    def test_annotate_cli_can_register_both_nested_and_hyphenated_directories(self):
+        from doctree.portable import main
+        for directory in ('a/b', 'a-b'):
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+            with redirect_stdout(StringIO()):
+                code = main(['--root', str(self.root), 'annotate', '--directory', directory])
+            self.assertEqual(code, 0)
+        nodes = discover_nodes(self.root)
+        self.assertEqual({node['directory'] for node in nodes}, {'a/b', 'a-b'})
+        self.assertEqual(len({node['id'] for node in nodes}), 2)
 
 
 if __name__ == '__main__':

@@ -1,8 +1,18 @@
+<!-- doctree:node {"schema":2,"id":"doctree","title":"DocTree 工具"} -->
+<!-- doctree:purpose:start -->
+> 本目录职责：维护人和 Agent 共用的目录协议、轻量查看器、显式文档核对与通用教学样例。
+<!-- doctree:purpose:end -->
+<!-- doctree:nav:start -->
+> 上级：无（项目入口）
+> 子目录：[协议与指南](docs/README.md) · [工具实现](doctree/README.md) · [回归验证](tests/README.md) · [人类目录视图](web/README.md)
+> 更新约定：先更新本目录；影响范围、结论或下一步时核对上级 README。执行完成与业务/科学验收分别记录。
+<!-- doctree:nav:end -->
+
 # DocTree · 给 Agent 和人类共用的目录说明
 
 DocTree 将目录职责、父子导航和更新约定保存在项目自己的 Markdown 中。Agent 直接沿文件阅读，人类通过可折叠的目录树浏览同一份内容；文件保持原位，治理范围由用户按实际用途选择。
 
-当前版本 **0.3.1**：文件树作为默认首页，支持展开层数、搜索、缩放和目录说明阅读。需要证据、交接与审阅历史时，可进入详细治理页。变更见 [版本说明](CHANGELOG.md)，格式见 [Markdown 节点协议 v2](docs/MARKDOWN_PROTOCOL_V2.md)。
+当前版本 **0.4.0**：文件树作为默认首页，支持展开层数、搜索、缩放和目录说明阅读。需要证据、交接与审阅历史时，可进入详细治理页。变更见 [版本说明](CHANGELOG.md)，格式见 [Markdown 节点协议 v2](docs/MARKDOWN_PROTOCOL_V2.md)。
 
 ## 首次接入：先装工具，再让 Agent 整理项目
 
@@ -111,11 +121,26 @@ python -X utf8 .doctree/manage.py annotate --directory . --purpose "项目目标
 
 `sync --check` 有待写入差异时退出码为 1；`sync` 应用已有节点的父子导航，不批量创建普通目录的 README。批量接入可用便携 `sync --selections 文件.json --check` 预览，去掉 `--check` 应用。选择项可为新文档提供实际 `initial_body`，已有文档不提供该字段；首次应用后日常使用不带选择文件的 `sync`。完整步骤见 [Agent 首次接入指令](docs/AGENT_ONBOARDING.md)。
 
-Agent 先读根 README，再沿链接阅读工作目录；完成工作后更新本目录，影响上级范围、结论或下一步时再核对父节点。工具负责结构和链接，`sync` 不自动总结正文、不判断业务或科学验收。当前没有持续文件监听、跨机器审阅通知或模型自动摘要。
+Agent 先读根 README，再沿链接阅读工作目录；完成工作后更新本目录，影响上级范围、结论或下一步时再核对父节点。工具负责结构和链接，`sync` 不自动总结正文、不判断业务或科学验收。可选的 Git 维护检查会提示待核对目录，并记录 Agent 或人的核对理由；没有持续文件监听或模型自动摘要。
+
+## 可选：收尾时发现可能漏更的说明
+
+在有提交历史、已接入节点的目标项目根目录运行：
+
+```powershell
+python -X utf8 .doctree/manage.py review init
+python -X utf8 .doctree/manage.py review check
+```
+
+第一次建立 Git 比较基线，之后在收尾时执行 `review check`。已提交和未提交的变化会归属到最近的目录节点；树图加载或刷新时也会提示“待核对说明”。未启用的项目维持原有导航方式。
+
+Agent 阅读实际差异后，更新说明，或记录“无需更新”及理由，再用当前 token 确认。只有明确需要时才提示直接父节点，逐级判断，在不影响上层时结束。共享记录只有一个 `doctree-review.json`，工具不自动改写正文，也不把这项声明当成业务验收。具体命令、读取边界和流程图见 [轻量维护说明](docs/MAINTENANCE.md)。
+
+`context --directory 路径` 现在直接定位目标，不受网页的批次折叠或 350 节点限制。默认只返回目标正文、祖先职责和孩子入口，最多 24000 个输出字符、20 个孩子；需要更多正文时显式使用 `--body-scope all`，或对某个孩子单独调用 context。截断会明确标记。
 
 ## 可选：教学样例与详细治理页
 
-若想先体验随仓库提供的两个教学项目，或查看证据、交接与审阅历史，在 **DocTree 工具仓库根目录**运行：
+若想先体验随仓库提供的教学项目（含五节点 v2 样例），或查看证据、交接与审阅历史，在 **DocTree 工具仓库根目录**运行：
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -143,8 +168,9 @@ python -X utf8 -m doctree --config config/projects.json --state-dir .doctree/sam
 ```powershell
 python -X utf8 -m unittest discover -s tests -v
 python -X utf8 scripts/demo_workflow.py
+python -X utf8 scripts/demo_v2_workflow.py
 ```
 
 演示脚本默认在临时副本中回放教学交接，不覆盖当前界面的历史。实现入口包括 [Markdown 注入](doctree/markdown_protocol.py)、[目录树与上下文](doctree/foldertree.py)、[治理范围](doctree/coverage.py)、[便携安装](doctree/portable.py)。
 
-[当前协议](docs/MARKDOWN_PROTOCOL_V2.md) · [v1 详细治理协议](docs/PROTOCOL.md) · [方法演进记录](docs/METHODOLOGY.md) · [版本说明](CHANGELOG.md)
+[维护闭环](docs/MAINTENANCE.md) · [当前协议](docs/MARKDOWN_PROTOCOL_V2.md) · [v1 详细治理协议](docs/PROTOCOL.md) · [方法演进记录](docs/METHODOLOGY.md) · [版本说明](CHANGELOG.md)

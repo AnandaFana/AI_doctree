@@ -1,0 +1,8 @@
+{
+  "kind": "fictional_reading_examples_not_execution_results",
+  "cases": [
+    {"input": "  hello  ", "expected": "hello"},
+    {"input": "hello  world", "expected": "hello  world"},
+    {"input": "\tlabel\n", "expected": "label"}
+  ]
+}

@@ -52,10 +52,122 @@ class FolderTreeTests(TestCase):
     def test_context_and_custom_entry_are_live_markdown(self):
         result = context(self.projects, 'p', 'docs')
         self.assertEqual(result['target']['entry'], 'docs/GUIDE.md')
-        self.assertIn('Keep this context.', result['ancestors'][0]['document']['content'])
+        self.assertEqual(result['ancestors'][0]['purpose'], 'Own the project')
+        self.assertEqual(result['ancestors'][0]['entry'], 'README.md')
+        self.assertNotIn('document', result['ancestors'][0])
+        expanded = context(self.projects, 'p', 'docs', body_scope='all')
+        self.assertIn('Keep this context.', expanded['ancestors'][0]['document']['content'])
         guide = self.root / 'docs' / 'GUIDE.md'
         guide.write_bytes(guide.read_bytes() + b'\nNew actual note.\n')
         self.assertIn('New actual note.', context(self.projects, 'p', 'docs')['target']['document']['content'])
+
+    def test_context_reaches_explicit_target_after_351_siblings_without_ui_scan(self):
+        for number in range(351):
+            (self.root / f'child-{number:03d}').mkdir()
+        target = self.root / 'child-350'
+        (target / 'README.md').write_text('# The explicit target\n', encoding='utf-8')
+        self.assertFalse(any(node['directory'] == 'child-350'
+                             for node in build_tree(self.projects)['nodes'].values()))
+        with mock.patch('doctree.foldertree.build_tree', side_effect=AssertionError('UI traversal is forbidden')):
+            result = context(self.projects, 'p', 'child-350')
+        self.assertEqual(result['target']['directory'], 'child-350')
+        self.assertIn('The explicit target', result['target']['document']['content'])
+        self.assertEqual(result['usage']['directories_read'], 2)
+
+    def test_context_reads_inside_runs_and_never_descends_into_grandchildren(self):
+        current = self.root / 'runs' / 'current'
+        (current / 'child' / 'grandchild').mkdir(parents=True)
+        (current / 'README.md').write_text('# Current run\n', encoding='utf-8')
+        (current / 'child' / 'README.md').write_text('# Child body not exported by default\n', encoding='utf-8')
+        original = Path.iterdir
+        visited = []
+
+        def immediate_only(path):
+            visited.append(path)
+            if path == current / 'child' / 'grandchild':
+                raise AssertionError('Grandchildren must not be scanned')
+            return original(path)
+
+        with mock.patch.object(Path, 'iterdir', immediate_only), \
+                mock.patch('doctree.foldertree.build_tree', side_effect=AssertionError('No UI scan')):
+            result = context(self.projects, 'p', 'runs/current')
+        self.assertEqual(result['target']['directory'], 'runs/current')
+        self.assertEqual([item['directory'] for item in result['children']], ['runs/current/child'])
+        self.assertNotIn('document', result['children'][0])
+        self.assertEqual(set(visited), {self.root, self.root / 'runs', current, current / 'child'})
+
+    def test_context_body_and_total_json_budgets_report_truncation(self):
+        text = ('中文 "quote" \\ newline\n' * 1000)
+        guide = self.root / 'docs' / 'GUIDE.md'
+        guide.write_text(guide.read_text(encoding='utf-8') + text, encoding='utf-8')
+        result = context(self.projects, 'p', 'docs', max_body_chars=120, max_chars=4096)
+        body = result['target']['document']
+        self.assertLessEqual(body['content_chars'], 120)
+        self.assertTrue(body['content_truncated'])
+        self.assertFalse(body['source_truncated'])
+        self.assertEqual(body['source_chars'], len(guide.read_bytes().decode('utf-8')))
+        large = context(self.projects, 'p', 'docs', body_scope='all', max_body_chars=8000, max_chars=4096)
+        serialized = json.dumps(large, ensure_ascii=False, indent=2) + '\n'
+        self.assertLessEqual(len(serialized), 4096)
+        self.assertEqual(large['usage']['output_chars'], len(serialized))
+        self.assertTrue(large['truncation']['output'])
+        self.assertTrue(large['target']['document']['content_truncated'])
+
+    def test_context_child_and_ancestor_limits_are_separate_from_ui_depth(self):
+        deepest = self.root / 'a' / 'b' / 'c' / 'd'
+        deepest.mkdir(parents=True)
+        for number in range(5):
+            (deepest / f'child-{number}').mkdir()
+        result = context(self.projects, 'p', 'a/b/c/d', max_ancestors=2, max_children=2)
+        self.assertEqual([item['directory'] for item in result['ancestors']], ['.', 'a/b/c'])
+        self.assertEqual(result['truncation']['ancestors_omitted'], 2)
+        self.assertEqual(result['usage']['children_discovered'], 5)
+        self.assertEqual(result['usage']['children_returned'], 2)
+        self.assertEqual(result['truncation']['children_omitted'], 3)
+        self.assertTrue(result['usage']['child_count_complete'])
+        self.assertEqual(len(result['children']), 2)
+
+    def test_context_can_omit_all_bodies_without_modifying_source_files(self):
+        before = {path.relative_to(self.root).as_posix(): path.read_bytes()
+                  for path in self.root.rglob('*.md')}
+        result = context(self.projects, 'p', '.', body_scope='none', max_children=0, max_ancestors=0)
+        self.assertNotIn('document', result['target'])
+        self.assertEqual(result['children'], [])
+        self.assertEqual(result['ancestors'], [])
+        self.assertEqual(before, {path.relative_to(self.root).as_posix(): path.read_bytes()
+                                  for path in self.root.rglob('*.md')})
+
+    def test_context_read_and_entry_budgets_do_not_make_partial_reads_look_complete(self):
+        partial = context(self.projects, 'p', '.', max_markdown_bytes=20)
+        self.assertLessEqual(partial['usage']['markdown_bytes_read'], 20)
+        self.assertTrue(partial['truncation']['source_read'])
+        self.assertTrue(partial['target']['document']['source_truncated'])
+        self.assertIsNone(partial['target']['document']['sha256'])
+        self.assertIsNone(partial['target']['version'])
+        entries = context(self.projects, 'p', '.', max_entries_per_directory=1)
+        self.assertFalse(entries['usage']['child_count_complete'])
+        self.assertTrue(entries['truncation']['directory_entries'])
+        self.assertEqual(entries['target']['entry'], 'README.md')
+
+    def test_context_rejects_hidden_linked_and_outside_target_paths(self):
+        for directory in ('..', '.doctree', 'C:/outside', 'docs/../records'):
+            with self.subTest(directory=directory), self.assertRaises(ValueError):
+                context(self.projects, 'p', directory)
+        alias = self.root / 'linked'
+        try:
+            alias.symlink_to(self.root / 'docs', target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f'Platform cannot create symlinks: {exc}')
+        self.addCleanup(alias.unlink)
+        with self.assertRaises(ValueError):
+            context(self.projects, 'p', 'linked')
+
+    def test_context_options_reject_invalid_values(self):
+        for options in ({'body_scope': 'children'}, {'max_chars': 2000}, {'max_chars': True},
+                        {'max_body_chars': -1}, {'max_children': -1}, {'max_ancestors': -1},
+                        {'max_entries_per_directory': 0}, {'max_markdown_bytes': 0}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                context(self.projects, 'p', '.', **options)
 
     def test_source_path_is_guarded_and_does_not_execute_markdown(self):
         target = self.root / 'docs' / 'payload.md'
